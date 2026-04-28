@@ -12,16 +12,32 @@ import (
 type Agent string
 
 const (
-	AgentClaudeCode Agent = "claude-code"
-	AgentCursor     Agent = "cursor"
-	AgentGeminiCLI  Agent = "gemini-cli"
-	AgentOpenCode   Agent = "opencode"
-	AgentCodexCLI   Agent = "codex-cli"
-	AgentCline      Agent = "cline"
-	AgentWindsurf   Agent = "windsurf"
-	AgentGoose      Agent = "goose"
-	AgentRooCode    Agent = "roo-code"
-	AgentAider      Agent = "aider"
+	// Big-lab native
+	AgentClaudeCode  Agent = "claude-code"
+	AgentCodexCLI    Agent = "codex-cli"
+	AgentGeminiCLI   Agent = "gemini-cli"
+	AgentCopilotCLI  Agent = "copilot-cli"
+	AgentQwenCode    Agent = "qwen-code"
+	AgentMistralVibe Agent = "mistral-vibe"
+	AgentKiro        Agent = "kiro"
+
+	// IDE / startup
+	AgentCursor    Agent = "cursor"
+	AgentWindsurf  Agent = "windsurf"
+	AgentAmp       Agent = "amp"
+	AgentDroid     Agent = "droid"
+	AgentWarp      Agent = "warp"
+	AgentAugment   Agent = "augment"
+
+	// Open source / community
+	AgentOpenCode  Agent = "opencode"
+	AgentCline     Agent = "cline"
+	AgentGoose     Agent = "goose"
+	AgentRooCode   Agent = "roo-code"
+	AgentKilo      Agent = "kilo"
+	AgentCrush     Agent = "crush"
+	AgentHermes    Agent = "hermes"
+	AgentAider     Agent = "aider"
 )
 
 // mcpConfig is the universal MCP server config block.
@@ -47,7 +63,9 @@ func Generate(agent Agent, projectDir string) error {
 		return generateOpenCode(projectDir)
 	case AgentCodexCLI:
 		return generateCodexCLI(projectDir)
-	case AgentCline, AgentWindsurf, AgentGoose, AgentRooCode:
+	case AgentCline, AgentWindsurf, AgentGoose, AgentRooCode, AgentKilo, AgentCrush,
+		AgentHermes, AgentAmp, AgentDroid, AgentWarp, AgentAugment,
+		AgentCopilotCLI, AgentQwenCode, AgentMistralVibe, AgentKiro:
 		return generateGenericMCP(projectDir, string(agent))
 	case AgentAider:
 		fmt.Println("Aider uses REST API. Add to your workflow:")
@@ -55,7 +73,9 @@ func Generate(agent Agent, projectDir string) error {
 		fmt.Println("  aider --read .yaad/context.md")
 		return nil
 	default:
-		return fmt.Errorf("unknown agent: %s", agent)
+		// Unknown agent — print universal MCP config
+		fmt.Printf("Unknown agent %q — using universal MCP config:\n", agent)
+		return generateGenericMCP(projectDir, string(agent))
 	}
 }
 

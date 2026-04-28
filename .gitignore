@@ -1,6 +1,6 @@
-# Binary
-yaad
-yaad.exe
+# Binary (root level only)
+/yaad
+/yaad.exe
 
 # Database (local, not shared)
 *.db

@@ -27,19 +27,42 @@
 
 <div align="center">
 
+**Big-Lab Native**
+
 | Agent | Integration | Setup |
 |:---:|:---:|:---:|
 | 🤖 **Claude Code** | MCP + hooks | `yaad setup claude-code` |
-| 🖱️ **Cursor** | MCP | `yaad setup cursor` |
-| 💎 **Gemini CLI** | MCP | `yaad setup gemini-cli` |
-| 📦 **OpenCode** | MCP + TS plugin | `yaad setup opencode` |
 | 🧠 **Codex CLI** | MCP | `yaad setup codex-cli` |
-| 🔧 **Cline** | MCP | `yaad setup cline` |
+| 💎 **Gemini CLI** | MCP | `yaad setup gemini-cli` |
+| 🐙 **Copilot CLI** | MCP | `yaad setup copilot-cli` |
+| 🌸 **Qwen Code** | MCP | `yaad setup qwen-code` |
+| 🌊 **Mistral Vibe** | MCP | `yaad setup mistral-vibe` |
+| ☁️ **Kiro** (AWS) | MCP | `yaad setup kiro` |
+
+**IDE / Startup**
+
+| Agent | Integration | Setup |
+|:---:|:---:|:---:|
+| 🖱️ **Cursor** | MCP | `yaad setup cursor` |
 | 🌊 **Windsurf** | MCP | `yaad setup windsurf` |
-| 🪿 **Goose** | MCP | `yaad setup goose` |
+| ⚡ **Amp** (Sourcegraph) | MCP | `yaad setup amp` |
+| 🤖 **Droid** (Factory) | MCP | `yaad setup droid` |
+| 🚀 **Warp** | MCP | `yaad setup warp` |
+| 🔍 **Augment** | MCP | `yaad setup augment` |
+
+**Open Source / Community**
+
+| Agent | Integration | Setup |
+|:---:|:---:|:---:|
+| 📦 **OpenCode** | MCP + TS plugin | `yaad setup opencode` |
+| 🔧 **Cline** | MCP | `yaad setup cline` |
+| 🪿 **Goose** (Block) | MCP | `yaad setup goose` |
 | 🦘 **Roo Code** | MCP | `yaad setup roo-code` |
+| 🔢 **Kilo** | MCP | `yaad setup kilo` |
+| 🍬 **Crush** (Charmbracelet) | MCP | `yaad setup crush` |
+| 🏛️ **Hermes** (NousResearch) | MCP | `yaad setup hermes` |
 | 🤝 **Aider** | REST API | `yaad setup aider` |
-| 🔌 **Any agent** | MCP / REST / gRPC | Universal config |
+| 🔌 **Any agent** | MCP / REST / gRPC | Universal config ↓ |
 
 </div>
 

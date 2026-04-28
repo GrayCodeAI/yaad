@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/GrayCodeAI/yaad/internal/agentconfig"
@@ -25,7 +26,7 @@ import (
 	intentpkg "github.com/GrayCodeAI/yaad/internal/intent"
 )
 
-var version = "0.1.0"
+var version = "dev" // set by -ldflags="-X main.version=v0.1.0" at build time
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
@@ -126,20 +127,35 @@ var recallCmd = &cobra.Command{
 		defer eng.Store().Close()
 		depth, _ := cmd.Flags().GetInt("depth")
 		limit, _ := cmd.Flags().GetInt("limit")
+		page, _ := cmd.Flags().GetInt("page")
 		result, err := eng.Recall(engine.RecallOpts{
 			Query: strings.Join(args, " "),
 			Depth: depth,
-			Limit: limit,
+			Limit: limit * page, // fetch enough for pagination
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		if len(result.Nodes) == 0 {
+		// Apply pagination
+		start := (page - 1) * limit
+		end := start + limit
+		nodes := result.Nodes
+		if start >= len(nodes) {
+			fmt.Printf("No results on page %d.\n", page)
+			return
+		}
+		if end > len(nodes) {
+			end = len(nodes)
+		}
+		nodes = nodes[start:end]
+
+		if len(nodes) == 0 {
 			fmt.Println("No memories found.")
 			return
 		}
-		for _, n := range result.Nodes {
+		fmt.Printf("Page %d (%d-%d of %d results)\n", page, start+1, end, len(result.Nodes))
+		for _, n := range nodes {
 			fmt.Printf("[%s] %s (confidence: %.2f, id: %s)\n", n.Type, truncate(n.Content, 70), n.Confidence, n.ID[:8])
 		}
 		if len(result.Edges) > 0 {
@@ -285,7 +301,8 @@ func init() {
 	rememberCmd.Flags().StringP("type", "t", "decision", "Node type")
 	rememberCmd.Flags().String("tags", "", "Comma-separated tags")
 	recallCmd.Flags().IntP("depth", "d", 2, "Graph expansion depth")
-	recallCmd.Flags().IntP("limit", "l", 10, "Max results")
+	recallCmd.Flags().IntP("limit", "l", 10, "Results per page")
+	recallCmd.Flags().IntP("page", "p", 1, "Page number")
 	subgraphCmd.Flags().IntP("depth", "d", 2, "BFS depth")
 	serveCmd.Flags().String("addr", ":3456", "Listen address")
 	benchCmd.Flags().Bool("extended", false, "Run extended 28-question benchmark")
@@ -298,7 +315,7 @@ func init() {
 		hookCmd, setupCmd, replayCmd,
 		exportJSONCmd, exportMarkdownCmd, exportObsidianCmd, importJSONCmd,
 		skillStoreCmd, skillListCmd, skillReplayCmd, benchCmd,
-		syncCmd, tuiCmd, intentCmd, doctorCmd)
+		syncCmd, tuiCmd, intentCmd, doctorCmd, watchCmd)
 }
 
 func truncate(s string, n int) string {
@@ -679,6 +696,44 @@ var tuiCmd = &cobra.Command{
 		if err := tui.Run(eng); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
+		}
+	},
+}
+
+var watchCmd = &cobra.Command{
+	Use:   "watch",
+	Short: "Watch for team sync changes and auto-import",
+	Long:  "Watches .yaad/manifest.json for changes and auto-runs 'yaad sync --import' when teammates push new chunks.",
+	Run: func(cmd *cobra.Command, args []string) {
+		dir, _ := os.Getwd()
+		manifest := filepath.Join(dir, ".yaad", "manifest.json")
+		fmt.Printf("Watching %s for team sync changes...\n", manifest)
+		fmt.Println("Press Ctrl+C to stop.")
+
+		var lastMod time.Time
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			info, err := os.Stat(manifest)
+			if err != nil {
+				continue
+			}
+			if info.ModTime().After(lastMod) && !lastMod.IsZero() {
+				fmt.Printf("[%s] manifest.json changed — importing...\n", time.Now().Format("15:04:05"))
+				eng := openEngine()
+				syncer := yaadsync.New(eng.Store(), dir)
+				n, e, err := syncer.Import()
+				eng.Store().Close()
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "import error: %v\n", err)
+				} else if n > 0 || e > 0 {
+					fmt.Printf("  ✓ Imported %d nodes, %d edges\n", n, e)
+				} else {
+					fmt.Println("  (no new chunks)")
+				}
+			}
+			lastMod = info.ModTime()
 		}
 	},
 }

@@ -27,6 +27,7 @@ const (
 	// IDE / startup
 	AgentCursor    Agent = "cursor"
 	AgentWindsurf  Agent = "windsurf"
+	AgentZed       Agent = "zed"
 	AgentAmp       Agent = "amp"
 	AgentDroid     Agent = "droid"
 	AgentWarp      Agent = "warp"
@@ -70,7 +71,7 @@ func Generate(agent Agent, projectDir string) error {
 		return generateHawk(projectDir)
 	case AgentCline, AgentWindsurf, AgentGoose, AgentRooCode, AgentKilo, AgentCrush,
 		AgentHermes, AgentAmp, AgentDroid, AgentWarp, AgentAugment,
-		AgentCopilotCLI, AgentQwenCode, AgentMistralVibe, AgentKiro:
+		AgentCopilotCLI, AgentQwenCode, AgentMistralVibe, AgentKiro, AgentZed:
 		return generateGenericMCP(projectDir, string(agent))
 	case AgentAider:
 		fmt.Println("Aider uses REST API. Add to your workflow:")

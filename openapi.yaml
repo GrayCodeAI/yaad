@@ -1,0 +1,563 @@
+openapi: "3.1.0"
+info:
+  title: Yaad API
+  description: |
+    Yaad (याद) — model-agnostic, graph-native memory for coding agents.
+    
+    Yaad is a **memory layer** — it does NOT call LLM APIs.
+    The coding agent (Hawk, Claude Code, Cursor, etc.) handles LLM calls.
+    Yaad stores, retrieves, and organizes memories via MCP, REST, or gRPC.
+  version: "0.1.0"
+  license:
+    name: MIT
+    url: https://github.com/GrayCodeAI/yaad/blob/main/LICENSE
+  contact:
+    url: https://github.com/GrayCodeAI/yaad
+
+servers:
+  - url: http://localhost:3456
+    description: Local development server
+
+tags:
+  - name: memory
+    description: Core memory operations
+  - name: graph
+    description: Graph traversal and analysis
+  - name: sessions
+    description: Session management
+  - name: search
+    description: Hybrid search
+  - name: system
+    description: Health and stats
+  - name: export
+    description: Import/export operations
+  - name: team
+    description: Team memory sharing
+  - name: skills
+    description: Procedural memory
+
+paths:
+  /yaad/health:
+    get:
+      tags: [system]
+      summary: Health check
+      responses:
+        "200":
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  version: { type: string, example: "0.1.0" }
+
+  /yaad/graph/stats:
+    get:
+      tags: [system]
+      summary: Graph statistics
+      parameters:
+        - name: project
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Graph stats
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Stats'
+
+  /yaad/remember:
+    post:
+      tags: [memory]
+      summary: Store a memory node
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RememberInput'
+      responses:
+        "201":
+          description: Node created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Node'
+
+  /yaad/recall:
+    post:
+      tags: [search]
+      summary: Graph-aware search (BM25 + graph + vector + temporal)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecallInput'
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecallResult'
+
+  /yaad/hybrid-recall:
+    post:
+      tags: [search]
+      summary: 4-path hybrid search with RRF fusion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecallInput'
+      responses:
+        "200":
+          description: Ranked results
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ScoredNode'
+
+  /yaad/context:
+    get:
+      tags: [memory]
+      summary: Get hot-tier context for session start (~2K tokens)
+      parameters:
+        - name: project
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Hot-tier subgraph
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecallResult'
+
+  /yaad/node/{id}:
+    get:
+      tags: [graph]
+      summary: Get node and its neighbors
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Node with neighbors
+
+  /yaad/forget/{id}:
+    delete:
+      tags: [memory]
+      summary: Archive a memory node
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Node archived
+
+  /yaad/link:
+    post:
+      tags: [graph]
+      summary: Create edge between nodes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LinkInput'
+      responses:
+        "201":
+          description: Edge created
+
+  /yaad/link/{id}:
+    delete:
+      tags: [graph]
+      summary: Remove edge
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Edge removed
+
+  /yaad/subgraph/{id}:
+    get:
+      tags: [graph]
+      summary: Get BFS subgraph around a node
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: depth
+          in: query
+          schema: { type: integer, default: 2 }
+      responses:
+        "200":
+          description: Subgraph
+
+  /yaad/impact/{file}:
+    get:
+      tags: [graph]
+      summary: Impact analysis — what memories are affected if this file changes?
+      parameters:
+        - name: file
+          in: path
+          required: true
+          schema: { type: string }
+        - name: depth
+          in: query
+          schema: { type: integer, default: 3 }
+      responses:
+        "200":
+          description: Affected nodes
+
+  /yaad/proactive:
+    get:
+      tags: [search]
+      summary: Proactive context prediction
+      parameters:
+        - name: project
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Predicted context
+
+  /yaad/session/start:
+    post:
+      tags: [sessions]
+      summary: Start a session and get context
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                project: { type: string }
+                agent: { type: string }
+      responses:
+        "201":
+          description: Session started with context
+
+  /yaad/session/end:
+    post:
+      tags: [sessions]
+      summary: End a session
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: string }
+                summary: { type: string }
+      responses:
+        "200":
+          description: Session ended
+
+  /yaad/sessions:
+    get:
+      tags: [sessions]
+      summary: List recent sessions
+      parameters:
+        - name: project
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 10 }
+      responses:
+        "200":
+          description: Sessions list
+
+  /yaad/stale:
+    get:
+      tags: [memory]
+      summary: Show stale memory subgraphs (git-aware)
+      responses:
+        "200":
+          description: Stale report
+
+  /yaad/events:
+    get:
+      tags: [system]
+      summary: SSE stream of real-time memory events
+      responses:
+        "200":
+          description: Server-Sent Events stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+  /yaad/replay/{session_id}:
+    get:
+      tags: [sessions]
+      summary: Get session replay timeline
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Replay events
+
+  /yaad/feedback:
+    post:
+      tags: [memory]
+      summary: Approve, edit, or discard a memory
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: string }
+                action: { type: string, enum: [approve, edit, discard] }
+                new_content: { type: string }
+      responses:
+        "200":
+          description: Feedback applied
+
+  /yaad/decay:
+    post:
+      tags: [memory]
+      summary: Apply confidence decay to all nodes
+      responses:
+        "200":
+          description: Decay applied
+
+  /yaad/gc:
+    post:
+      tags: [memory]
+      summary: Garbage collect low-confidence nodes
+      responses:
+        "200":
+          description: GC result
+
+  /yaad/export/json:
+    post:
+      tags: [export]
+      summary: Export graph as JSON
+      parameters:
+        - name: project
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Graph JSON export
+
+  /yaad/export/markdown:
+    post:
+      tags: [export]
+      summary: Export memories as Markdown
+      responses:
+        "200":
+          description: Markdown export
+
+  /yaad/import/json:
+    post:
+      tags: [export]
+      summary: Import graph from JSON
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GraphExport'
+      responses:
+        "200":
+          description: Import result
+
+  /yaad/bridge/import:
+    post:
+      tags: [export]
+      summary: Import from CLAUDE.md / .cursorrules / AGENTS.md
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                dir: { type: string }
+                project: { type: string }
+      responses:
+        "200":
+          description: Import result
+
+  /yaad/bridge/export:
+    post:
+      tags: [export]
+      summary: Export hot-tier conventions to CLAUDE.md
+      responses:
+        "200":
+          description: Export result
+
+  /yaad/team/share:
+    post:
+      tags: [team]
+      summary: Share a memory with the team
+      responses:
+        "201":
+          description: Shared node
+
+  /yaad/team/memories:
+    get:
+      tags: [team]
+      summary: List team memories
+      parameters:
+        - name: team_id
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Team memories
+
+  /yaad/skill/store:
+    post:
+      tags: [skills]
+      summary: Store a skill (procedural memory)
+      responses:
+        "201":
+          description: Skill stored
+
+  /yaad/skill/list:
+    get:
+      tags: [skills]
+      summary: List all skills
+      responses:
+        "200":
+          description: Skills list
+
+  /yaad/bench:
+    post:
+      tags: [system]
+      summary: Run retrieval benchmark
+      responses:
+        "200":
+          description: Benchmark results
+
+  /yaad/ui:
+    get:
+      tags: [system]
+      summary: Web dashboard (D3.js graph visualization)
+      responses:
+        "200":
+          description: HTML dashboard
+          content:
+            text/html:
+              schema:
+                type: string
+
+components:
+  schemas:
+    Node:
+      type: object
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [convention, decision, bug, spec, task, preference, session, file, entity, skill] }
+        content: { type: string }
+        summary: { type: string }
+        scope: { type: string, enum: [global, project] }
+        project: { type: string }
+        tier: { type: integer, enum: [1, 2, 3] }
+        tags: { type: string }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        access_count: { type: integer }
+        created_at: { type: string, format: date-time }
+
+    Edge:
+      type: object
+      properties:
+        id: { type: string }
+        from_id: { type: string }
+        to_id: { type: string }
+        type: { type: string, enum: [caused_by, led_to, supersedes, relates_to, depends_on, touches, learned_in, part_of] }
+        acyclic: { type: boolean }
+        weight: { type: number }
+
+    RememberInput:
+      type: object
+      required: [content]
+      properties:
+        content: { type: string }
+        type: { type: string, default: decision }
+        summary: { type: string }
+        tags: { type: string }
+        project: { type: string }
+        scope: { type: string, default: project }
+        session: { type: string }
+        agent: { type: string }
+
+    RecallInput:
+      type: object
+      required: [query]
+      properties:
+        query: { type: string }
+        depth: { type: integer, default: 2 }
+        limit: { type: integer, default: 10 }
+        type: { type: string }
+        project: { type: string }
+
+    RecallResult:
+      type: object
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Node'
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/Edge'
+
+    ScoredNode:
+      type: object
+      properties:
+        node:
+          $ref: '#/components/schemas/Node'
+        score: { type: number }
+
+    LinkInput:
+      type: object
+      required: [from_id, to_id, type]
+      properties:
+        from_id: { type: string }
+        to_id: { type: string }
+        type: { type: string }
+        weight: { type: number, default: 1.0 }
+
+    Stats:
+      type: object
+      properties:
+        Nodes: { type: integer }
+        Edges: { type: integer }
+        Sessions: { type: integer }
+
+    GraphExport:
+      type: object
+      properties:
+        version: { type: string }
+        exported_at: { type: string, format: date-time }
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Node'
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/Edge'

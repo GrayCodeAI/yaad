@@ -631,18 +631,22 @@ func TestPhase6DualStream(t *testing.T) {
 	}
 
 	// Give slow path time to run and release DB lock
-	time.Sleep(200 * time.Millisecond)
-
-	// Verify temporal backbone edge exists
-	edges, _ := eng.Store().GetEdgesFrom(node.ID)
-	hasTemporalEdge := false
-	for _, e := range edges {
-		if e.ToID == node2.ID && e.Type == "learned_in" {
-			hasTemporalEdge = true
+	// Retry up to 500ms (slow path runs async)
+	var hasTemporalEdge bool
+	for i := 0; i < 10; i++ {
+		time.Sleep(50 * time.Millisecond)
+		edges, _ := eng.Store().GetEdgesFrom(node.ID)
+		for _, e := range edges {
+			if e.ToID == node2.ID && e.Type == "learned_in" {
+				hasTemporalEdge = true
+			}
+		}
+		if hasTemporalEdge {
+			break
 		}
 	}
 	if !hasTemporalEdge {
-		t.Error("dual stream: temporal backbone edge not created")
+		t.Error("dual stream: temporal backbone edge not created within 500ms")
 	}
 }
 

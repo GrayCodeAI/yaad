@@ -61,6 +61,10 @@ func NewStore(dbPath string) (*Store, error) {
 	if err := db.Ping(); err != nil {
 		return nil, err
 	}
+	// Set busy timeout so concurrent reads wait instead of failing immediately
+	if _, err := db.Exec("PRAGMA busy_timeout = 5000"); err != nil {
+		return nil, err
+	}
 	s := &Store{db: db}
 	if err := s.createTables(); err != nil {
 		return nil, err

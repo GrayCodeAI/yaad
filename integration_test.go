@@ -17,15 +17,18 @@ import (
 	"github.com/GrayCodeAI/yaad/internal/bench"
 	"github.com/GrayCodeAI/yaad/internal/boundary"
 	"github.com/GrayCodeAI/yaad/internal/embeddings"
+	"github.com/GrayCodeAI/yaad/internal/encrypt"
 	"github.com/GrayCodeAI/yaad/internal/engine"
 	"github.com/GrayCodeAI/yaad/internal/exportimport"
 	"github.com/GrayCodeAI/yaad/internal/hooks"
 	"github.com/GrayCodeAI/yaad/internal/ingest"
 	intentpkg "github.com/GrayCodeAI/yaad/internal/intent"
+	"github.com/GrayCodeAI/yaad/internal/profile"
 	"github.com/GrayCodeAI/yaad/internal/server"
 	"github.com/GrayCodeAI/yaad/internal/skill"
 	"github.com/GrayCodeAI/yaad/internal/storage"
 	"github.com/GrayCodeAI/yaad/internal/team"
+	"github.com/GrayCodeAI/yaad/internal/utils"
 	yaadsync "github.com/GrayCodeAI/yaad/internal/sync"
 )
 
@@ -836,6 +839,172 @@ func TestPhase6BoundaryDetector(t *testing.T) {
 	det3.Add("PostgreSQL database connection pooling configuration")
 	// May or may not trigger — just verify it runs without error
 	t.Logf("Boundary detector size after 2 items: %d", det3.Size())
+}
+
+func TestPrivacyFilter(t *testing.T) {
+	eng, cleanup := setup(t)
+	defer cleanup()
+
+	// Store content with secrets — should be stripped
+	node, _ := eng.Remember(engine.RememberInput{
+		Type:    "convention",
+		Content: "Use API key sk-1234567890abcdefghijklmnop for auth and AKIA1234567890ABCDEF for AWS",
+		Scope:   "project",
+	})
+	if strings.Contains(node.Content, "sk-1234567890") {
+		t.Error("privacy: API key not stripped")
+	}
+	if strings.Contains(node.Content, "AKIA1234567890") {
+		t.Error("privacy: AWS key not stripped")
+	}
+	if !strings.Contains(node.Content, "[REDACTED]") {
+		t.Error("privacy: expected [REDACTED] placeholder")
+	}
+}
+
+func TestEncryption(t *testing.T) {
+	dir := t.TempDir()
+	testFile := filepath.Join(dir, "test.txt")
+	os.WriteFile(testFile, []byte("hello world secret data"), 0644)
+
+	// Generate key
+	key, err := encrypt.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key == "" {
+		t.Error("encrypt: empty key")
+	}
+
+	// Encrypt
+	if err := encrypt.EncryptFile(testFile, key); err != nil {
+		t.Fatal(err)
+	}
+	if !encrypt.IsEncrypted(testFile) {
+		t.Error("encrypt: file should appear encrypted")
+	}
+
+	// Decrypt
+	if err := encrypt.DecryptFile(testFile, key); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(testFile)
+	if string(data) != "hello world secret data" {
+		t.Errorf("encrypt: decrypted content mismatch: %s", data)
+	}
+}
+
+func TestUtilsShortID(t *testing.T) {
+	cases := []struct{ input, expected string }{
+		{"abcdefghijklmnop", "abcdefgh"},
+		{"short", "short"},
+		{"12345678", "12345678"},
+		{"", ""},
+		{"ab", "ab"},
+	}
+	for _, c := range cases {
+		got := utils.ShortID(c.input)
+		if got != c.expected {
+			t.Errorf("ShortID(%q) = %q, want %q", c.input, got, c.expected)
+		}
+	}
+}
+
+func TestEdgeCaseEmptyRecall(t *testing.T) {
+	eng, cleanup := setup(t)
+	defer cleanup()
+
+	// Recall on empty DB should return empty, not error
+	result, err := eng.Recall(engine.RecallOpts{Query: "nonexistent", Limit: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Nodes) != 0 {
+		t.Errorf("empty recall: expected 0 nodes, got %d", len(result.Nodes))
+	}
+}
+
+func TestEdgeCaseContextEmpty(t *testing.T) {
+	eng, cleanup := setup(t)
+	defer cleanup()
+
+	// Context on empty DB should return empty, not error
+	result, err := eng.Context("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil {
+		t.Error("context: should return empty result, not nil")
+	}
+}
+
+func TestEdgeCaseForgetNonexistent(t *testing.T) {
+	eng, cleanup := setup(t)
+	defer cleanup()
+
+	// Forget nonexistent node should error gracefully
+	err := eng.Forget("nonexistent-id-12345678")
+	if err == nil {
+		t.Error("forget: should error on nonexistent node")
+	}
+}
+
+func TestProfileMerge(t *testing.T) {
+	a := &profile.Profile{
+		Project: "test",
+		Static:  []string{"Use jose", "Use NATS"},
+		Dynamic: []string{"[task] rate limiting"},
+		Stack:   []string{"TypeScript", "NATS"},
+	}
+	b := &profile.Profile{
+		Static:  []string{"Prefer tabs", "Use jose"}, // "Use jose" is duplicate
+		Dynamic: []string{"[bug] auth race"},
+		Stack:   []string{"PostgreSQL", "NATS"}, // "NATS" is duplicate
+	}
+	merged := profile.Merge(a, b)
+	// Static should be deduped
+	if len(merged.Static) != 3 { // jose, NATS, tabs
+		t.Errorf("merge: expected 3 static, got %d: %v", len(merged.Static), merged.Static)
+	}
+	// Stack should be deduped
+	if len(merged.Stack) != 3 { // TypeScript, NATS, PostgreSQL
+		t.Errorf("merge: expected 3 stack, got %d: %v", len(merged.Stack), merged.Stack)
+	}
+	// Dynamic should be combined (not deduped)
+	if len(merged.Dynamic) != 2 {
+		t.Errorf("merge: expected 2 dynamic, got %d", len(merged.Dynamic))
+	}
+}
+
+func TestMultipleRememberAndRecall(t *testing.T) {
+	eng, cleanup := setup(t)
+	defer cleanup()
+
+	// Store 20 memories of different types
+	types := []string{"convention", "decision", "bug", "spec", "task"}
+	for i := 0; i < 20; i++ {
+		eng.Remember(engine.RememberInput{
+			Type:    types[i%len(types)],
+			Content: fmt.Sprintf("Memory item %d about topic %d", i, i%5),
+			Scope:   "project",
+		})
+	}
+
+	// Recall should find results
+	result, err := eng.Recall(engine.RecallOpts{Query: "topic", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Nodes) == 0 {
+		t.Error("bulk recall: expected nodes")
+	}
+	t.Logf("Stored 20, recalled %d nodes", len(result.Nodes))
+
+	// Status should show correct counts
+	st, _ := eng.Status("")
+	if st.Nodes < 20 {
+		t.Errorf("status: expected ≥20 nodes, got %d", st.Nodes)
+	}
 }
 
 func TestRESTAPI(t *testing.T) {

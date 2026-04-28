@@ -7,6 +7,7 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// Config holds all Yaad configuration.
 type Config struct {
 	Server     ServerConfig     `toml:"server"`
 	Memory     MemoryConfig     `toml:"memory"`

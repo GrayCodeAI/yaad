@@ -3,6 +3,7 @@ package engine
 import (
 	"crypto/sha256"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/google/uuid"
@@ -97,7 +98,7 @@ func (e *Engine) Remember(in RememberInput) (*storage.Node, error) {
 		existing.Confidence = min(existing.Confidence+0.2, 1.0)
 		existing.AccessCount++
 		existing.AccessedAt = time.Now()
-		_ = e.store.UpdateNode(existing)
+		logErr("update node", e.store.UpdateNode(existing))
 		return existing, nil
 	}
 
@@ -126,29 +127,29 @@ func (e *Engine) Remember(in RememberInput) (*storage.Node, error) {
 	for _, ent := range entities {
 		entNode := e.getOrCreateAnchor(ent.Name, ent.Type, in.Scope, in.Project)
 		if entNode != nil {
-			_ = e.graph.AddEdge(&storage.Edge{
+			logErr("link entity", e.graph.AddEdge(&storage.Edge{
 				ID:     uuid.New().String(),
 				FromID: node.ID,
 				ToID:   entNode.ID,
 				Type:   "touches",
 				Weight: 1.0,
-			})
+			}))
 		}
 	}
 
 	// 7. Create explicit edges
 	for _, ei := range in.Edges {
-		_ = e.graph.AddEdge(&storage.Edge{
+		logErr("link edge", e.graph.AddEdge(&storage.Edge{
 			ID:     uuid.New().String(),
 			FromID: node.ID,
 			ToID:   ei.ToID,
 			Type:   ei.Type,
 			Weight: 1.0,
-		})
+		}))
 	}
 
 	// 8. Temporal backbone — auto-link to previous node in timeline
-	_ = e.temporal.Link(node.ID, in.Project)
+	logErr("temporal link", e.temporal.Link(node.ID, in.Project))
 
 	// 9. Conflict resolution — detect and supersede contradictions
 	_, _ = e.conflict.CheckAndResolve(node)
@@ -225,7 +226,7 @@ func (e *Engine) Recall(opts RecallOpts) (*RecallResult, error) {
 		// Boost access
 		n.AccessCount++
 		n.AccessedAt = time.Now()
-		_ = e.store.UpdateNode(n)
+		logErr("update node", e.store.UpdateNode(n))
 		nodes = append(nodes, n)
 	}
 	sortByScore(nodes)
@@ -291,7 +292,7 @@ func (e *Engine) Forget(id string) error {
 		return err
 	}
 	// Save version before archiving
-	_ = e.store.SaveVersion(node.ID, node.Content, "system", "archived")
+	logErr("save version", e.store.SaveVersion(node.ID, node.Content, "system", "archived"))
 	node.Confidence = 0
 	return e.store.UpdateNode(node)
 }
@@ -427,4 +428,11 @@ func min(a, b float64) float64 {
 		return a
 	}
 	return b
+}
+
+// logErr logs non-nil errors from fire-and-forget operations.
+func logErr(op string, err error) {
+	if err != nil {
+		log.Printf("[yaad:warn] %s: %v", op, err)
+	}
 }

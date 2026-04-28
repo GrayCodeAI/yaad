@@ -10,6 +10,7 @@ import (
 
 // Types
 
+// Node represents a memory node in the Yaad graph.
 type Node struct {
 	ID, Type, Content, ContentHash, Summary, Scope, Project, Tags string
 	Tier                                                          int
@@ -20,6 +21,7 @@ type Node struct {
 	Version                                                       int
 }
 
+// Edge represents a relationship between two nodes in the graph.
 type Edge struct {
 	ID, FromID, ToID, Type, Metadata string
 	Acyclic                          bool
@@ -27,17 +29,20 @@ type Edge struct {
 	CreatedAt                        time.Time
 }
 
+// Session tracks a coding agent session.
 type Session struct {
 	ID, Project, Summary, Agent string
 	StartedAt, EndedAt          time.Time
 }
 
+// NodeVersion stores a historical version of a node for audit/rollback.
 type NodeVersion struct {
 	NodeID, Content, ChangedBy, Reason string
 	Version                            int
 	ChangedAt                          time.Time
 }
 
+// NodeFilter specifies criteria for listing nodes.
 type NodeFilter struct {
 	Type, Scope, Project string
 	Tier                 int
@@ -46,6 +51,7 @@ type NodeFilter struct {
 
 // Store
 
+// Store is the SQLite-backed storage layer for Yaad.
 type Store struct {
 	db *sql.DB
 }

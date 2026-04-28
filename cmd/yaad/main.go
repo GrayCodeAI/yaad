@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -36,29 +35,7 @@ func main() {
 	}
 }
 
-// --- helpers ---
-
-func dbPath() string {
-	dir, _ := os.Getwd()
-	return filepath.Join(dir, ".yaad", "yaad.db")
-}
-
-func openEngine() *engine.Engine {
-	os.MkdirAll(filepath.Dir(dbPath()), 0755)
-	store, err := storage.NewStore(dbPath())
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	return engine.New(store)
-}
-
-func printJSON(v any) {
-	b, _ := json.MarshalIndent(v, "", "  ")
-	fmt.Println(string(b))
-}
-
-// --- commands ---
+// --- Core commands ---
 
 var rootCmd = &cobra.Command{
 	Use:   "yaad",
@@ -319,14 +296,7 @@ func init() {
 		syncCmd, tuiCmd, intentCmd, doctorCmd, watchCmd)
 }
 
-func truncate(s string, n int) string {
-	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) > n {
-		return s[:n] + "..."
-	}
-	return s
-}
-
+// --- Phase 3+ commands ---
 var embedCmd = &cobra.Command{
 	Use:   "embed [node_id]",
 	Short: "Generate and store embedding for a node",

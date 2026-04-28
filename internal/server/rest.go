@@ -102,6 +102,7 @@ func (s *RESTServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /yaad/bench", s.handleBench)
 	mux.HandleFunc("POST /yaad/compact", s.handleCompact)
 	mux.HandleFunc("GET /yaad/mental-model", s.handleMentalModel)
+	mux.HandleFunc("GET /yaad/profile", s.handleProfile)
 }
 
 func (s *RESTServer) handleRemember(w http.ResponseWriter, r *http.Request) {
@@ -558,6 +559,16 @@ func (s *RESTServer) handleMentalModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpJSON(w, map[string]any{"model": model, "formatted": model.Format()}, 200)
+}
+
+func (s *RESTServer) handleProfile(w http.ResponseWriter, r *http.Request) {
+	project := r.URL.Query().Get("project")
+	p, err := s.eng.Profile(project)
+	if err != nil {
+		httpErr(w, err, 500)
+		return
+	}
+	httpJSON(w, map[string]any{"profile": p, "formatted": p.Format()}, 200)
 }
 
 // --- helpers ---

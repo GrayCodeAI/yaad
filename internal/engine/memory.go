@@ -14,6 +14,7 @@ import (
 	"github.com/GrayCodeAI/yaad/internal/intent"
 	"github.com/GrayCodeAI/yaad/internal/mental"
 	"github.com/GrayCodeAI/yaad/internal/privacy"
+	"github.com/GrayCodeAI/yaad/internal/profile"
 	"github.com/GrayCodeAI/yaad/internal/storage"
 	"github.com/GrayCodeAI/yaad/internal/temporal"
 )
@@ -313,6 +314,11 @@ func (e *Engine) Compact(project string) (int, error) {
 // MentalModel generates an auto-evolving project summary.
 func (e *Engine) MentalModel(project string) (*mental.Model, error) {
 	return mental.Generate(e.store, project)
+}
+
+// Profile returns an auto-maintained user/project profile (static facts + dynamic context).
+func (e *Engine) Profile(project string) (*profile.Profile, error) {
+	return profile.Build(e.store, project)
 }
 
 func (e *Engine) Status(project string) (*Status, error) {

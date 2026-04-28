@@ -553,6 +553,32 @@ func TestGitSync(t *testing.T) {
 	}
 }
 
+func TestUserProfile(t *testing.T) {
+	eng, cleanup := setup(t)
+	defer cleanup()
+
+	eng.Remember(engine.RememberInput{Type: "convention", Content: "Use jose for JWT auth", Scope: "project"})
+	eng.Remember(engine.RememberInput{Type: "decision", Content: "Chose NATS for event bus", Scope: "project"})
+	eng.Remember(engine.RememberInput{Type: "task", Content: "Add rate limiting", Scope: "project"})
+	eng.Remember(engine.RememberInput{Type: "preference", Content: "Prefers functional style", Scope: "project"})
+
+	p, err := eng.Profile("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Static) == 0 {
+		t.Error("profile: no static facts")
+	}
+	if p.Summary == "" {
+		t.Error("profile: empty summary")
+	}
+	formatted := p.Format()
+	if !strings.Contains(formatted, "User Profile") {
+		t.Error("profile: formatted output missing header")
+	}
+	t.Logf("Profile:\n%s", formatted)
+}
+
 func TestConflictResolver(t *testing.T) {
 	eng, cleanup := setup(t)
 	defer cleanup()

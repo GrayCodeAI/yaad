@@ -134,6 +134,12 @@ func (s *MCPServer) registerTools() {
 		mcp.WithDescription("Classify query intent (Why/When/Who/How/What/General) for intent-aware retrieval"),
 		mcp.WithString("query", mcp.Required(), mcp.Description("Query to classify")),
 	), s.handleIntent)
+
+	// yaad_profile
+	add(mcp.NewTool("yaad_profile",
+		mcp.WithDescription("Get auto-maintained user/project profile: static facts + dynamic recent context"),
+		mcp.WithString("project", mcp.Description("Project path")),
+	), s.handleProfile)
 }
 
 // --- Tool handlers ---
@@ -271,6 +277,17 @@ func (s *MCPServer) handleIntent(_ context.Context, req mcp.CallToolRequest) (*m
 		"query":   query,
 		"intent":  i.String(),
 		"weights": weights,
+	})
+}
+
+func (s *MCPServer) handleProfile(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	p, err := s.eng.Profile(strArg(req, "project"))
+	if err != nil {
+		return nil, err
+	}
+	return jsonResult(map[string]any{
+		"profile":   p,
+		"formatted": p.Format(),
 	})
 }
 

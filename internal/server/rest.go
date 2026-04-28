@@ -100,6 +100,8 @@ func (s *RESTServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /yaad/skill/list", s.handleSkillList)
 	mux.HandleFunc("GET /yaad/skill/{name}", s.handleSkillGet)
 	mux.HandleFunc("POST /yaad/bench", s.handleBench)
+	mux.HandleFunc("POST /yaad/compact", s.handleCompact)
+	mux.HandleFunc("GET /yaad/mental-model", s.handleMentalModel)
 }
 
 func (s *RESTServer) handleRemember(w http.ResponseWriter, r *http.Request) {
@@ -536,6 +538,26 @@ func (s *RESTServer) handleSkillGet(w http.ResponseWriter, r *http.Request) {
 func (s *RESTServer) handleBench(w http.ResponseWriter, r *http.Request) {
 	result := bench.Run(s.eng, bench.DefaultQAs(), 2, 10)
 	httpJSON(w, map[string]string{"report": result.String()}, 200)
+}
+
+func (s *RESTServer) handleCompact(w http.ResponseWriter, r *http.Request) {
+	project := r.URL.Query().Get("project")
+	n, err := s.eng.Compact(project)
+	if err != nil {
+		httpErr(w, err, 500)
+		return
+	}
+	httpJSON(w, map[string]int{"compacted": n}, 200)
+}
+
+func (s *RESTServer) handleMentalModel(w http.ResponseWriter, r *http.Request) {
+	project := r.URL.Query().Get("project")
+	model, err := s.eng.MentalModel(project)
+	if err != nil {
+		httpErr(w, err, 500)
+		return
+	}
+	httpJSON(w, map[string]any{"model": model, "formatted": model.Format()}, 200)
 }
 
 // --- helpers ---

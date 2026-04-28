@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -550,6 +551,138 @@ func TestGitSync(t *testing.T) {
 	if n2 != 0 || e2 != 0 {
 		t.Errorf("second import should be idempotent, got %d nodes %d edges", n2, e2)
 	}
+}
+
+func TestConflictResolver(t *testing.T) {
+	eng, cleanup := setup(t)
+	defer cleanup()
+
+	// Store original convention
+	old, _ := eng.Remember(engine.RememberInput{
+		Type: "convention", Content: "Use jsonwebtoken library for JWT", Scope: "project",
+	})
+
+	// Store contradicting convention (should supersede)
+	newNode, _ := eng.Remember(engine.RememberInput{
+		Type: "convention", Content: "Use jose instead of jsonwebtoken for Edge compatibility", Scope: "project",
+	})
+
+	// Verify old node confidence was lowered
+	oldUpdated, _ := eng.Store().GetNode(old.ID)
+	if oldUpdated.Confidence >= 1.0 {
+		t.Errorf("conflict: old node confidence should be lowered, got %.2f", oldUpdated.Confidence)
+	}
+
+	// Verify supersedes edge exists
+	edges, _ := eng.Store().GetEdgesFrom(newNode.ID)
+	hasSupersedes := false
+	for _, e := range edges {
+		if e.Type == "supersedes" && e.ToID == old.ID {
+			hasSupersedes = true
+		}
+	}
+	if !hasSupersedes {
+		t.Error("conflict: supersedes edge not created")
+	}
+}
+
+func TestTemporalBackbone(t *testing.T) {
+	eng, cleanup := setup(t)
+	defer cleanup()
+
+	n1, _ := eng.Remember(engine.RememberInput{Type: "convention", Content: "First convention", Scope: "project", Project: "test"})
+	n2, _ := eng.Remember(engine.RememberInput{Type: "decision", Content: "Second decision", Scope: "project", Project: "test"})
+	n3, _ := eng.Remember(engine.RememberInput{Type: "bug", Content: "Third bug report", Scope: "project", Project: "test"})
+
+	// Verify temporal chain: n1 → n2 → n3
+	edges1, _ := eng.Store().GetEdgesFrom(n1.ID)
+	hasLink12 := false
+	for _, e := range edges1 {
+		if e.Type == "learned_in" && e.ToID == n2.ID {
+			hasLink12 = true
+		}
+	}
+	edges2, _ := eng.Store().GetEdgesFrom(n2.ID)
+	hasLink23 := false
+	for _, e := range edges2 {
+		if e.Type == "learned_in" && e.ToID == n3.ID {
+			hasLink23 = true
+		}
+	}
+	if !hasLink12 {
+		t.Error("temporal: n1→n2 learned_in edge missing")
+	}
+	if !hasLink23 {
+		t.Error("temporal: n2→n3 learned_in edge missing")
+	}
+}
+
+func TestDedupRollingWindow(t *testing.T) {
+	eng, cleanup := setup(t)
+	defer cleanup()
+
+	n1, _ := eng.Remember(engine.RememberInput{
+		Type: "convention", Content: "Use jose for JWT auth", Scope: "project",
+	})
+	// Same content again — should return same node (dedup)
+	n2, _ := eng.Remember(engine.RememberInput{
+		Type: "convention", Content: "Use jose for JWT auth", Scope: "project",
+	})
+
+	if n1.ID != n2.ID {
+		t.Errorf("dedup: expected same node ID, got %s and %s", n1.ID[:8], n2.ID[:8])
+	}
+}
+
+func TestCompaction(t *testing.T) {
+	eng, cleanup := setup(t)
+	defer cleanup()
+
+	// Store 5 low-confidence nodes
+	for i := 0; i < 5; i++ {
+		n, _ := eng.Remember(engine.RememberInput{
+			Type: "decision", Content: fmt.Sprintf("Old decision %d about something", i), Scope: "project",
+		})
+		node, _ := eng.Store().GetNode(n.ID)
+		node.Confidence = 0.2
+		node.AccessCount = 0
+		eng.Store().UpdateNode(node)
+	}
+
+	// Run compaction
+	compacted, err := eng.Compact("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compacted == 0 {
+		t.Error("compaction: expected nodes to be compacted")
+	}
+	t.Logf("Compacted %d nodes", compacted)
+}
+
+func TestMentalModel(t *testing.T) {
+	eng, cleanup := setup(t)
+	defer cleanup()
+
+	eng.Remember(engine.RememberInput{Type: "convention", Content: "Use jose for JWT", Scope: "project"})
+	eng.Remember(engine.RememberInput{Type: "decision", Content: "Chose NATS for events", Scope: "project"})
+	eng.Remember(engine.RememberInput{Type: "task", Content: "Add rate limiting", Scope: "project"})
+
+	model, err := eng.MentalModel("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.Summary == "" {
+		t.Error("mental model: empty summary")
+	}
+	if len(model.Conventions) == 0 {
+		t.Error("mental model: no conventions")
+	}
+	formatted := model.Format()
+	if formatted == "" {
+		t.Error("mental model: empty formatted output")
+	}
+	t.Logf("Mental model:\n%s", formatted)
 }
 
 func TestPhase6IntentClassifier(t *testing.T) {

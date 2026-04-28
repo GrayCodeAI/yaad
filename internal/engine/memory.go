@@ -6,21 +6,35 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/GrayCodeAI/yaad/internal/compact"
+	"github.com/GrayCodeAI/yaad/internal/conflict"
+	"github.com/GrayCodeAI/yaad/internal/dedup"
 	"github.com/GrayCodeAI/yaad/internal/graph"
 	"github.com/GrayCodeAI/yaad/internal/intent"
+	"github.com/GrayCodeAI/yaad/internal/mental"
 	"github.com/GrayCodeAI/yaad/internal/privacy"
 	"github.com/GrayCodeAI/yaad/internal/storage"
+	"github.com/GrayCodeAI/yaad/internal/temporal"
 )
 
 // Engine is the core memory engine wrapping graph + storage.
 type Engine struct {
-	store *storage.Store
-	graph *graph.Graph
+	store    *storage.Store
+	graph    *graph.Graph
+	dedup    *dedup.Window
+	temporal *temporal.Backbone
+	conflict *conflict.Resolver
 }
 
 // New creates a memory engine.
 func New(store *storage.Store) *Engine {
-	return &Engine{store: store, graph: graph.New(store)}
+	return &Engine{
+		store:    store,
+		graph:    graph.New(store),
+		dedup:    dedup.New(5 * time.Minute),
+		temporal: temporal.New(store),
+		conflict: conflict.New(store),
+	}
 }
 
 // Graph returns the underlying graph engine.
@@ -64,7 +78,17 @@ func (e *Engine) Remember(in RememberInput) (*storage.Node, error) {
 		in.Tier = defaultTier(in.Type)
 	}
 
-	// 3. Content hash for dedup
+	// 3. Rolling window dedup (skip near-duplicates within 5min)
+	if e.dedup.IsDuplicate(content) {
+		// Find existing by hash and boost
+		hash := contentHash(content, in.Scope, in.Project)
+		existing, _ := e.store.SearchNodeByHash(hash, in.Scope, in.Project)
+		if existing != nil {
+			return existing, nil
+		}
+	}
+
+	// 4. Content hash for exact dedup
 	hash := contentHash(content, in.Scope, in.Project)
 
 	// 4. Check dedup — if exists, boost confidence
@@ -122,6 +146,12 @@ func (e *Engine) Remember(in RememberInput) (*storage.Node, error) {
 			Weight: 1.0,
 		})
 	}
+
+	// 8. Temporal backbone — auto-link to previous node in timeline
+	_ = e.temporal.Link(node.ID, in.Project)
+
+	// 9. Conflict resolution — detect and supersede contradictions
+	_, _ = e.conflict.CheckAndResolve(node)
 
 	return node, nil
 }
@@ -271,6 +301,17 @@ type Status struct {
 	Nodes    int
 	Edges    int
 	Sessions int
+}
+
+// Compact merges low-confidence memories to keep the graph lean.
+func (e *Engine) Compact(project string) (int, error) {
+	c := compact.New(e.store, 50000)
+	return c.Compact(project)
+}
+
+// MentalModel generates an auto-evolving project summary.
+func (e *Engine) MentalModel(project string) (*mental.Model, error) {
+	return mental.Generate(e.store, project)
 }
 
 func (e *Engine) Status(project string) (*Status, error) {

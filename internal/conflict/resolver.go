@@ -66,15 +66,15 @@ func isContradiction(newNode, oldNode *storage.Node) bool {
 	newEntities := extractKeyTerms(newNode.Content)
 	oldEntities := extractKeyTerms(oldNode.Content)
 
-	// Must share at least 2 key terms (same topic)
+	// Must share at least 1 key term for same-type nodes (same topic)
 	shared := 0
 	for term := range newEntities {
 		if oldEntities[term] {
 			shared++
 		}
 	}
-	if shared < 2 {
-		return false // different topics, not a contradiction
+	if shared < 1 {
+		return false // completely different topics
 	}
 
 	// Check for negation patterns

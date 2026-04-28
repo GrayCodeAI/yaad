@@ -1,18 +1,17 @@
 // Package ingest implements dual-stream memory ingestion.
 // Based on MAGMA (arxiv:2601.03236) and GAM (arxiv:2604.12285).
 //
+// Yaad is a memory layer — it does NOT call LLM APIs directly.
+// The coding agent (Hawk, Claude Code, Cursor, etc.) handles the LLM.
+// Yaad stores, retrieves, and organizes memories.
+//
 // Fast path (sync): non-blocking — store node + temporal edge, return immediately.
-// Slow path (async): background goroutine — causal inference, entity linking, consolidation.
+// Slow path (async): background goroutine — heuristic causal inference, entity linking.
 package ingest
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
 	"log"
-	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -38,13 +37,8 @@ type DualStream struct {
 	queue    chan SlowPathJob
 	wg       sync.WaitGroup
 	once     sync.Once
-	lastNode map[string]string // project → last node ID (for temporal backbone)
+	lastNode map[string]string // project → last node ID (temporal backbone)
 	mu       sync.Mutex
-	// Optional: LLM API key for causal inference (MAGMA slow path)
-	// If empty, falls back to heuristic causal inference
-	LLMAPIKey  string
-	LLMBaseURL string
-	LLMModel   string
 }
 
 // New creates a DualStream ingestion manager.
@@ -60,9 +54,9 @@ func New(eng *engine.Engine) *DualStream {
 }
 
 // Remember is the fast path: stores node + temporal edge synchronously, then
-// enqueues slow-path work (causal inference, entity linking) asynchronously.
+// enqueues slow-path work (heuristic causal inference) asynchronously.
 func (ds *DualStream) Remember(in engine.RememberInput) (*storage.Node, error) {
-	// Fast path: store node (privacy filter + dedup + basic entity extraction)
+	// Fast path: store node
 	node, err := ds.eng.Remember(in)
 	if err != nil {
 		return nil, err
@@ -79,7 +73,7 @@ func (ds *DualStream) Remember(in engine.RememberInput) (*storage.Node, error) {
 			ID:     uuid.New().String(),
 			FromID: prevID,
 			ToID:   node.ID,
-			Type:   "learned_in", // temporal backbone
+			Type:   "learned_in",
 			Weight: 1.0,
 		})
 	}
@@ -113,138 +107,25 @@ func (ds *DualStream) startWorker() {
 	})
 }
 
-// slowPath performs async structural consolidation:
-// - Infer causal edges (LLM if configured, heuristic otherwise)
-// - Link entity nodes
+// slowPath performs heuristic causal inference in the background.
+// No LLM calls — Yaad is a memory layer, not an LLM client.
+// The coding agent handles LLM; Yaad handles memory structure.
 func (ds *DualStream) slowPath(job SlowPathJob) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	_ = ctx
 
 	node, err := job.Eng.Store().GetNode(job.NodeID)
 	if err != nil {
 		return
 	}
 
-	// Get local neighborhood (2 hops)
 	neighbors, err := job.Graph.BFS(job.NodeID, 2)
 	if err != nil || len(neighbors) < 2 {
 		return
 	}
 
-	// LLM-based causal inference (MAGMA slow path)
-	// If LLM configured, ask it to infer causal relationships
-	if ds.LLMAPIKey != "" {
-		ds.llmCausalInference(ctx, job, node, neighbors)
-	} else {
-		// Heuristic fallback
-		ds.heuristicCausalInference(job, node, neighbors)
-	}
-
-	log.Printf("[yaad:slow] processed node %s (%s)", job.NodeID[:8], node.Type)
-}
-
-// llmCausalInference uses an LLM to infer causal edges (MAGMA-style).
-func (ds *DualStream) llmCausalInference(ctx context.Context, job SlowPathJob, node *storage.Node, neighborIDs []string) {
-	// Build neighborhood context
-	var neighborContents []string
-	var neighborMap = map[string]*storage.Node{}
-	for _, id := range neighborIDs {
-		if id == job.NodeID {
-			continue
-		}
-		n, err := job.Eng.Store().GetNode(id)
-		if err == nil {
-			neighborContents = append(neighborContents, fmt.Sprintf("[%s] %s", n.Type, n.Content))
-			neighborMap[id] = n
-		}
-	}
-	if len(neighborContents) == 0 {
-		return
-	}
-
-	prompt := fmt.Sprintf(`Given this new memory:
-[%s] %s
-
-And these related memories:
-%s
-
-Identify causal relationships. For each relationship, output JSON:
-{"from_id": "...", "to_id": "...", "type": "led_to|caused_by|part_of"}
-Only output relationships you are confident about. Output empty array [] if none.`,
-		node.Type, node.Content,
-		strings.Join(neighborContents[:min3(len(neighborContents), 5)], "\n"))
-
-	body, _ := json.Marshal(map[string]any{
-		"model": ds.LLMModel,
-		"messages": []map[string]string{
-			{"role": "user", "content": prompt},
-		},
-		"max_tokens":  200,
-		"temperature": 0,
-	})
-
-	baseURL := ds.LLMBaseURL
-	if baseURL == "" {
-		baseURL = "https://api.openai.com"
-	}
-	req, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/v1/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		ds.heuristicCausalInference(job, node, neighborIDs)
-		return
-	}
-	req.Header.Set("Authorization", "Bearer "+ds.LLMAPIKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		ds.heuristicCausalInference(job, node, neighborIDs)
-		return
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		Choices []struct {
-			Message struct{ Content string } `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || len(result.Choices) == 0 {
-		ds.heuristicCausalInference(job, node, neighborIDs)
-		return
-	}
-
-	// Parse edges from LLM response
-	raw := result.Choices[0].Message.Content
-	start := strings.Index(raw, "[")
-	end := strings.LastIndex(raw, "]")
-	if start < 0 || end < 0 {
-		return
-	}
-	var edges []struct {
-		FromID string `json:"from_id"`
-		ToID   string `json:"to_id"`
-		Type   string `json:"type"`
-	}
-	if err := json.Unmarshal([]byte(raw[start:end+1]), &edges); err != nil {
-		return
-	}
-	for _, e := range edges {
-		// Validate IDs exist in neighborhood
-		if _, ok := neighborMap[e.FromID]; !ok && e.FromID != job.NodeID {
-			continue
-		}
-		_ = job.Graph.AddEdge(&storage.Edge{
-			ID:     uuid.New().String(),
-			FromID: e.FromID,
-			ToID:   e.ToID,
-			Type:   e.Type,
-			Weight: 0.9, // LLM-inferred, high confidence
-		})
-	}
-}
-
-// heuristicCausalInference uses rule-based causal inference (no LLM).
-func (ds *DualStream) heuristicCausalInference(job SlowPathJob, node *storage.Node, neighborIDs []string) {
-	for _, neighborID := range neighborIDs {
+	for _, neighborID := range neighbors {
 		if neighborID == job.NodeID {
 			continue
 		}
@@ -259,7 +140,7 @@ func (ds *DualStream) heuristicCausalInference(job SlowPathJob, node *storage.No
 				Type: "led_to", Weight: 0.8,
 			})
 		}
-		// decision → caused_by ← bug
+		// decision ← caused_by ← bug
 		if neighbor.Type == "decision" && node.Type == "bug" {
 			_ = job.Graph.AddEdge(&storage.Edge{
 				ID: uuid.New().String(), FromID: job.NodeID, ToID: neighborID,
@@ -274,13 +155,8 @@ func (ds *DualStream) heuristicCausalInference(job SlowPathJob, node *storage.No
 			})
 		}
 	}
-}
 
-func min3(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
+	log.Printf("[yaad:slow] processed node %s (%s)", job.NodeID[:8], node.Type)
 }
 
 // Stop gracefully shuts down the slow-path worker.

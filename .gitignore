@@ -1,0 +1,27 @@
+# Binary
+yaad
+yaad.exe
+
+# Database (local, not shared)
+*.db
+*.db-shm
+*.db-wal
+
+# Sync tracking (local state)
+.yaad/.imported
+
+# Embeddings cache
+*.vec
+
+# Build artifacts
+dist/
+*.test
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

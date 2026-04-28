@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Yaad — Memory Graph</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; }
+  #header { padding: 12px 20px; background: #1a1d27; border-bottom: 1px solid #2d3748; display: flex; align-items: center; gap: 16px; }
+  #header h1 { font-size: 18px; font-weight: 600; color: #a78bfa; }
+  #header span { font-size: 13px; color: #718096; }
+  #stats { display: flex; gap: 16px; margin-left: auto; font-size: 13px; }
+  #stats span { color: #a0aec0; }
+  #stats b { color: #e2e8f0; }
+  #controls { padding: 10px 20px; background: #1a1d27; border-bottom: 1px solid #2d3748; display: flex; gap: 12px; align-items: center; }
+  #search { background: #2d3748; border: 1px solid #4a5568; color: #e2e8f0; padding: 6px 12px; border-radius: 6px; font-size: 13px; width: 240px; }
+  #search:focus { outline: none; border-color: #a78bfa; }
+  .filter-btn { background: #2d3748; border: 1px solid #4a5568; color: #a0aec0; padding: 5px 10px; border-radius: 5px; font-size: 12px; cursor: pointer; }
+  .filter-btn.active { background: #553c9a; border-color: #a78bfa; color: #e9d8fd; }
+  #canvas { width: 100%; height: calc(100vh - 100px); }
+  #tooltip { position: fixed; background: #1a1d27; border: 1px solid #4a5568; border-radius: 8px; padding: 10px 14px; font-size: 13px; max-width: 320px; pointer-events: none; display: none; z-index: 100; }
+  #tooltip .type { font-size: 11px; color: #a78bfa; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+  #tooltip .content { color: #e2e8f0; line-height: 1.5; }
+  #tooltip .meta { font-size: 11px; color: #718096; margin-top: 6px; }
+  .node { cursor: pointer; }
+  .link { stroke-opacity: 0.4; }
+</style>
+</head>
+<body>
+<div id="header">
+  <h1>याद Yaad</h1>
+  <span>Memory Graph</span>
+  <div id="stats">
+    <span>Nodes: <b id="node-count">0</b></span>
+    <span>Edges: <b id="edge-count">0</b></span>
+  </div>
+</div>
+<div id="controls">
+  <input id="search" type="text" placeholder="Search memories..." />
+  <button class="filter-btn active" data-type="all">All</button>
+  <button class="filter-btn" data-type="convention">Convention</button>
+  <button class="filter-btn" data-type="decision">Decision</button>
+  <button class="filter-btn" data-type="bug">Bug</button>
+  <button class="filter-btn" data-type="spec">Spec</button>
+  <button class="filter-btn" data-type="task">Task</button>
+  <button class="filter-btn" data-type="skill">Skill</button>
+</div>
+<svg id="canvas"></svg>
+<div id="tooltip">
+  <div class="type" id="tt-type"></div>
+  <div class="content" id="tt-content"></div>
+  <div class="meta" id="tt-meta"></div>
+</div>
+
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script>
+const TYPE_COLORS = {
+  convention: '#68d391', decision: '#63b3ed', bug: '#fc8181',
+  spec: '#f6ad55', task: '#b794f4', preference: '#76e4f7',
+  session: '#718096', file: '#a0aec0', entity: '#4a5568', skill: '#f687b3',
+};
+const EDGE_COLORS = {
+  led_to: '#68d391', supersedes: '#fc8181', caused_by: '#f6ad55',
+  relates_to: '#63b3ed', depends_on: '#b794f4', touches: '#4a5568',
+  learned_in: '#718096', part_of: '#a0aec0',
+};
+
+let allNodes = [], allEdges = [], activeFilter = 'all', searchTerm = '';
+
+async function loadGraph() {
+  try {
+    const [statsRes, nodesRes] = await Promise.all([
+      fetch('/yaad/graph/stats'),
+      fetch('/yaad/recall', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({query:'*', limit:200, depth:1}) })
+    ]);
+    const stats = await statsRes.json();
+    document.getElementById('node-count').textContent = stats.Nodes || 0;
+    document.getElementById('edge-count').textContent = stats.Edges || 0;
+
+    const data = await nodesRes.json();
+    allNodes = (data.nodes || []).map(n => ({...n, id: n.id}));
+    allEdges = (data.edges || []).map(e => ({...e, source: e.from_id, target: e.to_id}));
+    render();
+  } catch(e) {
+    console.error('Failed to load graph:', e);
+  }
+}
+
+function render() {
+  const svg = d3.select('#canvas');
+  svg.selectAll('*').remove();
+
+  const W = svg.node().clientWidth || window.innerWidth;
+  const H = svg.node().clientHeight || (window.innerHeight - 100);
+
+  // Filter nodes
+  const visibleNodes = allNodes.filter(n => {
+    if (activeFilter !== 'all' && n.type !== activeFilter) return false;
+    if (searchTerm && !n.content.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+    return true;
+  });
+  const visibleIDs = new Set(visibleNodes.map(n => n.id));
+  const visibleEdges = allEdges.filter(e => visibleIDs.has(e.source) && visibleIDs.has(e.target));
+
+  const g = svg.append('g');
+
+  // Zoom
+  svg.call(d3.zoom().scaleExtent([0.1, 4]).on('zoom', e => g.attr('transform', e.transform)));
+
+  // Simulation
+  const sim = d3.forceSimulation(visibleNodes)
+    .force('link', d3.forceLink(visibleEdges).id(d => d.id).distance(80))
+    .force('charge', d3.forceManyBody().strength(-200))
+    .force('center', d3.forceCenter(W/2, H/2))
+    .force('collision', d3.forceCollide(20));
+
+  // Edges
+  const link = g.append('g').selectAll('line')
+    .data(visibleEdges).join('line')
+    .attr('class', 'link')
+    .attr('stroke', d => EDGE_COLORS[d.type] || '#4a5568')
+    .attr('stroke-width', 1.5);
+
+  // Nodes
+  const node = g.append('g').selectAll('g')
+    .data(visibleNodes).join('g')
+    .attr('class', 'node')
+    .call(d3.drag()
+      .on('start', (e, d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; })
+      .on('end', (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }));
+
+  node.append('circle')
+    .attr('r', d => 6 + (d.access_count || 0) * 0.5)
+    .attr('fill', d => TYPE_COLORS[d.type] || '#718096')
+    .attr('opacity', d => 0.4 + d.confidence * 0.6)
+    .attr('stroke', '#1a1d27').attr('stroke-width', 1.5);
+
+  node.append('text')
+    .attr('dy', -10).attr('text-anchor', 'middle')
+    .attr('font-size', 10).attr('fill', '#a0aec0')
+    .text(d => d.content.substring(0, 20) + (d.content.length > 20 ? '…' : ''));
+
+  // Tooltip
+  const tt = document.getElementById('tooltip');
+  node.on('mouseover', (e, d) => {
+    document.getElementById('tt-type').textContent = d.type;
+    document.getElementById('tt-content').textContent = d.content.substring(0, 200);
+    document.getElementById('tt-meta').textContent = `confidence: ${(d.confidence*100).toFixed(0)}% | tier: ${d.tier} | id: ${d.id.substring(0,8)}`;
+    tt.style.display = 'block';
+    tt.style.left = (e.clientX + 12) + 'px';
+    tt.style.top = (e.clientY - 10) + 'px';
+  }).on('mousemove', e => {
+    tt.style.left = (e.clientX + 12) + 'px';
+    tt.style.top = (e.clientY - 10) + 'px';
+  }).on('mouseout', () => { tt.style.display = 'none'; });
+
+  sim.on('tick', () => {
+    link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+        .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+    node.attr('transform', d => `translate(${d.x},${d.y})`);
+  });
+}
+
+// Controls
+document.getElementById('search').addEventListener('input', e => {
+  searchTerm = e.target.value; render();
+});
+document.querySelectorAll('.filter-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    activeFilter = btn.dataset.type;
+    render();
+  });
+});
+
+loadGraph();
+setInterval(loadGraph, 10000); // refresh every 10s
+</script>
+</body>
+</html>

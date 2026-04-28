@@ -1,0 +1,22 @@
+{
+  "name": "@graycode/yaad",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for Yaad — persistent memory for coding agents",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": ["yaad", "memory", "coding-agent", "mcp", "graph", "ai"],
+  "author": "GrayCodeAI",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GrayCodeAI/yaad"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

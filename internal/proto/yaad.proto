@@ -1,6 +1,6 @@
 syntax = "proto3";
 package yaad;
-option go_package = "github.com/yaadmemory/yaad/internal/proto";
+option go_package = "github.com/GrayCodeAI/yaad/internal/proto";
 
 // Core memory node
 message Node {

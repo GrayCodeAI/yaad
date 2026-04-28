@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yaadmemory/yaad/internal/storage"
+	"github.com/GrayCodeAI/yaad/internal/storage"
 )
 
 // GraphExport is the full graph export format.

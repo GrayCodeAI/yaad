@@ -15,9 +15,9 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/google/uuid"
-	"github.com/yaadmemory/yaad/internal/engine"
-	"github.com/yaadmemory/yaad/internal/graph"
-	"github.com/yaadmemory/yaad/internal/storage"
+	"github.com/GrayCodeAI/yaad/internal/engine"
+	"github.com/GrayCodeAI/yaad/internal/graph"
+	"github.com/GrayCodeAI/yaad/internal/storage"
 )
 
 // --- gRPC message types (JSON-serializable) ---

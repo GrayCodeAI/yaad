@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/yaadmemory/yaad/internal/storage"
+	"github.com/GrayCodeAI/yaad/internal/storage"
 )
 
 // FeedbackAction represents what to do with a pending memory.

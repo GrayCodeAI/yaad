@@ -4,8 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/yaadmemory/yaad/internal/intent"
-	"github.com/yaadmemory/yaad/internal/storage"
+	"github.com/GrayCodeAI/yaad/internal/intent"
+	"github.com/GrayCodeAI/yaad/internal/storage"
 )
 
 // Acyclic edge types — cycle detection enforced on insert.

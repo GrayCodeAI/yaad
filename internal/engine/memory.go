@@ -6,10 +6,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/yaadmemory/yaad/internal/graph"
-	"github.com/yaadmemory/yaad/internal/intent"
-	"github.com/yaadmemory/yaad/internal/privacy"
-	"github.com/yaadmemory/yaad/internal/storage"
+	"github.com/GrayCodeAI/yaad/internal/graph"
+	"github.com/GrayCodeAI/yaad/internal/intent"
+	"github.com/GrayCodeAI/yaad/internal/privacy"
+	"github.com/GrayCodeAI/yaad/internal/storage"
 )
 
 // Engine is the core memory engine wrapping graph + storage.

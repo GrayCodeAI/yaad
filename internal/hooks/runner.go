@@ -11,9 +11,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/yaadmemory/yaad/internal/engine"
-	"github.com/yaadmemory/yaad/internal/privacy"
-	"github.com/yaadmemory/yaad/internal/storage"
+	"github.com/GrayCodeAI/yaad/internal/engine"
+	"github.com/GrayCodeAI/yaad/internal/privacy"
+	"github.com/GrayCodeAI/yaad/internal/storage"
 )
 
 // HookInput is the JSON payload passed to hooks via stdin.

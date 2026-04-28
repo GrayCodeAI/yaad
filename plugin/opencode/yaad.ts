@@ -4,7 +4,7 @@
  * Gives OpenCode persistent, graph-native memory via Yaad.
  *
  * Install: copy this file to ~/.config/opencode/plugins/yaad.ts
- * Requires: yaad binary in PATH (https://github.com/yaadmemory/yaad)
+ * Requires: yaad binary in PATH (https://github.com/GrayCodeAI/yaad)
  */
 
 import type { Plugin } from "@opencode-ai/sdk";

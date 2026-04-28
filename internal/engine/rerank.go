@@ -4,7 +4,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/yaadmemory/yaad/internal/storage"
+	"github.com/GrayCodeAI/yaad/internal/storage"
 )
 
 // Rerank re-scores nodes combining RRF score, graph centrality, recency, and confidence.

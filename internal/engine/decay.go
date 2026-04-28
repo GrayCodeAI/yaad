@@ -4,7 +4,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/yaadmemory/yaad/internal/storage"
+	"github.com/GrayCodeAI/yaad/internal/storage"
 )
 
 // DecayConfig controls decay behaviour.

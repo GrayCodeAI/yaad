@@ -1,4 +1,4 @@
-module github.com/yaadmemory/yaad
+module github.com/GrayCodeAI/yaad
 
 go 1.25.5
 

@@ -9,8 +9,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-a78bfa.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go)](go.mod)
 [![Pure Go](https://img.shields.io/badge/CGO-disabled-68d391)](Makefile)
-[![Tests](https://img.shields.io/badge/Tests-14%2F14-68d391)](integration_test.go)
+[![Tests](https://img.shields.io/badge/Tests-17%2F17-68d391)](integration_test.go)
 [![R@5](https://img.shields.io/badge/R%405-100%25-f6ad55)](internal/bench/bench.go)
+[![CI](https://img.shields.io/github/actions/workflow/status/GrayCodeAI/yaad/ci.yml?label=ci&logo=github)](https://github.com/GrayCodeAI/yaad/actions)
 
 <br/>
 

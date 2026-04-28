@@ -8,9 +8,9 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
-	intentpkg "github.com/yaadmemory/yaad/internal/intent"
-	"github.com/yaadmemory/yaad/internal/engine"
-	"github.com/yaadmemory/yaad/internal/storage"
+	intentpkg "github.com/GrayCodeAI/yaad/internal/intent"
+	"github.com/GrayCodeAI/yaad/internal/engine"
+	"github.com/GrayCodeAI/yaad/internal/storage"
 )
 
 // MCPServer wraps the MCP protocol server.

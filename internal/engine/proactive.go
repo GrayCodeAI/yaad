@@ -4,7 +4,7 @@ import (
 	"context"
 	"sort"
 
-	"github.com/yaadmemory/yaad/internal/storage"
+	"github.com/GrayCodeAI/yaad/internal/storage"
 )
 
 // ProactiveContext predicts what context the agent will likely need next

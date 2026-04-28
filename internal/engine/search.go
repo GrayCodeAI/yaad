@@ -4,10 +4,10 @@ import (
 	"context"
 	"sort"
 
-	"github.com/yaadmemory/yaad/internal/embeddings"
-	"github.com/yaadmemory/yaad/internal/graph"
-	"github.com/yaadmemory/yaad/internal/intent"
-	"github.com/yaadmemory/yaad/internal/storage"
+	"github.com/GrayCodeAI/yaad/internal/embeddings"
+	"github.com/GrayCodeAI/yaad/internal/graph"
+	"github.com/GrayCodeAI/yaad/internal/intent"
+	"github.com/GrayCodeAI/yaad/internal/storage"
 )
 
 const rrfK = 60 // RRF constant

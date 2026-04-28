@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yaadmemory/yaad/internal/graph"
-	"github.com/yaadmemory/yaad/internal/storage"
+	"github.com/GrayCodeAI/yaad/internal/graph"
+	"github.com/GrayCodeAI/yaad/internal/storage"
 )
 
 // StaleReport describes a stale subgraph.

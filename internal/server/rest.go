@@ -9,14 +9,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/yaadmemory/yaad/internal/bench"
-	"github.com/yaadmemory/yaad/internal/bridge"
-	"github.com/yaadmemory/yaad/internal/embeddings"
-	"github.com/yaadmemory/yaad/internal/engine"
-	"github.com/yaadmemory/yaad/internal/exportimport"
-	"github.com/yaadmemory/yaad/internal/skill"
-	"github.com/yaadmemory/yaad/internal/storage"
-	"github.com/yaadmemory/yaad/internal/team"
+	"github.com/GrayCodeAI/yaad/internal/bench"
+	"github.com/GrayCodeAI/yaad/internal/bridge"
+	"github.com/GrayCodeAI/yaad/internal/embeddings"
+	"github.com/GrayCodeAI/yaad/internal/engine"
+	"github.com/GrayCodeAI/yaad/internal/exportimport"
+	"github.com/GrayCodeAI/yaad/internal/skill"
+	"github.com/GrayCodeAI/yaad/internal/storage"
+	"github.com/GrayCodeAI/yaad/internal/team"
 )
 
 // RESTServer serves the HTTP API.

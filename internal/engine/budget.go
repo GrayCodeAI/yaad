@@ -3,7 +3,7 @@ package engine
 import (
 	"strings"
 
-	"github.com/yaadmemory/yaad/internal/storage"
+	"github.com/GrayCodeAI/yaad/internal/storage"
 )
 
 // TrimToTokenBudget trims a node list to fit within a token budget.

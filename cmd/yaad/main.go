@@ -481,6 +481,7 @@ var setupCmd = &cobra.Command{
 	Long: `Generate MCP/REST config for your coding agent.
 
 Supported agents:
+  GrayCodeAI: hawk
   Big-lab:    claude-code, codex-cli, gemini-cli, copilot-cli, qwen-code, mistral-vibe, kiro
   IDE/Startup: cursor, windsurf, amp, droid, warp, augment
   Open source: opencode, cline, goose, roo-code, kilo, crush, hermes, aider

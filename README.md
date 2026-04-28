@@ -27,6 +27,12 @@
 
 <div align="center">
 
+**GrayCodeAI**
+
+| Agent | Integration | Setup |
+|:---:|:---:|:---:|
+| 🦅 **Hawk** | MCP | `yaad setup hawk` |
+
 **Big-Lab Native**
 
 | Agent | Integration | Setup |
@@ -259,6 +265,7 @@ yaad link <id1> <id2> led_to yaad subgraph <id>
 yaad impact src/auth.ts      yaad tui
 
 # Agent setup
+yaad setup hawk              # ← GrayCodeAI's own CLI
 yaad setup claude-code       yaad setup cursor
 yaad setup gemini-cli        yaad setup opencode
 yaad setup codex-cli         yaad setup cline

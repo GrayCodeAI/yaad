@@ -21,6 +21,9 @@ const (
 	AgentMistralVibe Agent = "mistral-vibe"
 	AgentKiro        Agent = "kiro"
 
+	// GrayCodeAI
+	AgentHawk Agent = "hawk"
+
 	// IDE / startup
 	AgentCursor    Agent = "cursor"
 	AgentWindsurf  Agent = "windsurf"
@@ -63,6 +66,8 @@ func Generate(agent Agent, projectDir string) error {
 		return generateOpenCode(projectDir)
 	case AgentCodexCLI:
 		return generateCodexCLI(projectDir)
+	case AgentHawk:
+		return generateHawk(projectDir)
 	case AgentCline, AgentWindsurf, AgentGoose, AgentRooCode, AgentKilo, AgentCrush,
 		AgentHermes, AgentAmp, AgentDroid, AgentWarp, AgentAugment,
 		AgentCopilotCLI, AgentQwenCode, AgentMistralVibe, AgentKiro:
@@ -113,6 +118,15 @@ func generateCursor(dir string) error {
 
 func generateGeminiCLI(_ string) error {
 	fmt.Println("Run: gemini mcp add yaad -- yaad mcp")
+	return nil
+}
+
+func generateHawk(_ string) error {
+	fmt.Println("Run: hawk mcp add yaad -- yaad mcp")
+	fmt.Println("")
+	fmt.Println("Or add to ~/.hawk/mcp.json:")
+	b, _ := json.MarshalIndent(mcpConfig, "", "  ")
+	fmt.Println(string(b))
 	return nil
 }
 

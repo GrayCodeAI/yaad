@@ -11,7 +11,7 @@
 [![Pure Go](https://img.shields.io/badge/CGO-disabled-68d391)](Makefile)
 [![Tests](https://img.shields.io/badge/Tests-17%2F17-68d391)](integration_test.go)[![R@5](https://img.shields.io/badge/R%405-83%25-f6ad55)](internal/bench/bench.go)
 [![CI](https://img.shields.io/github/actions/workflow/status/GrayCodeAI/yaad/ci.yml?label=ci&logo=github)](https://github.com/GrayCodeAI/yaad/actions)
-[![Discord](https://img.shields.io/badge/Discord-GrayCodeAI-5865F2?logo=discord&logoColor=white)](https://discord.gg/Fmq46SN8)
+[![Discord](https://img.shields.io/badge/Discord-GrayCodeAI-5865F2?logo=discord&logoColor=white)](https://discord.gg/UqMbQJRE5)
 
 <br/>
 
@@ -393,7 +393,7 @@ yaad/
 
 ## 🤝 Community
 
-- **Discord**: [GrayCodeAI](https://discord.gg/Fmq46SN8) — chat with the team, get help, share feedback
+- **Discord**: [GrayCodeAI](https://discord.gg/UqMbQJRE5) — chat with the team, get help, share feedback
 - **Issues**: [GitHub Issues](https://github.com/GrayCodeAI/yaad/issues) — bug reports and feature requests
 - **Contributing**: [CONTRIBUTING.md](CONTRIBUTING.md)
 

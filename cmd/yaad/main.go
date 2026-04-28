@@ -21,6 +21,7 @@ import (
 	"github.com/yaadmemory/yaad/internal/storage"
 	yaadsync "github.com/yaadmemory/yaad/internal/sync"
 	"github.com/yaadmemory/yaad/internal/tui"
+	intentpkg "github.com/yaadmemory/yaad/internal/intent"
 )
 
 var version = "0.1.0"
@@ -295,7 +296,7 @@ func init() {
 		hookCmd, setupCmd, replayCmd,
 		exportJSONCmd, exportMarkdownCmd, exportObsidianCmd, importJSONCmd,
 		skillStoreCmd, skillListCmd, skillReplayCmd, benchCmd,
-		syncCmd, tuiCmd)
+		syncCmd, tuiCmd, intentCmd)
 }
 
 func truncate(s string, n int) string {
@@ -672,6 +673,23 @@ var tuiCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+	},
+}
+
+var intentCmd = &cobra.Command{
+	Use:   "intent [query]",
+	Short: "Classify query intent (Why/When/Who/How/What) for intent-aware retrieval",
+	Args:  cobra.MinimumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		query := strings.Join(args, " ")
+		i := intentpkg.Classify(query)
+		w := intentpkg.Weights(i)
+		fmt.Printf("Query:  %s\n", query)
+		fmt.Printf("Intent: %s\n", i.String())
+		fmt.Printf("Edge weights:\n")
+		fmt.Printf("  caused_by:  %.1f  led_to:    %.1f\n", w.CausedBy, w.LedTo)
+		fmt.Printf("  learned_in: %.1f  touches:   %.1f\n", w.LearnedIn, w.Touches)
+		fmt.Printf("  part_of:    %.1f  relates_to: %.1f\n", w.PartOf, w.RelatesTo)
 	},
 }
 

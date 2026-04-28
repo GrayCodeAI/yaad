@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/yaadmemory/yaad/internal/intent"
 	"github.com/yaadmemory/yaad/internal/storage"
 )
 
@@ -192,6 +193,81 @@ func (g *Graph) Descendants(id string) ([]string, error) {
 		ids = append(ids, did)
 	}
 	return ids, rows.Err()
+}
+
+// IntentBFS performs intent-aware BFS from startID.
+// Edge traversal is weighted by the query intent (MAGMA-style adaptive traversal).
+// Edges with higher intent weight are traversed first and given higher scores.
+func (g *Graph) IntentBFS(startID string, maxDepth int, queryIntent intent.Intent) ([]string, error) {
+	weights := intent.Weights(queryIntent)
+
+	// Use a priority-aware BFS: score each neighbor by edge weight × semantic fit
+	// For simplicity (no embeddings required), we use edge weight as the sole score.
+	type candidate struct {
+		id    string
+		score float64
+		depth int
+	}
+
+	visited := map[string]bool{startID: true}
+	queue := []candidate{{id: startID, score: 1.0, depth: 0}}
+	var result []string
+	result = append(result, startID)
+
+	for len(queue) > 0 {
+		curr := queue[0]
+		queue = queue[1:]
+
+		if curr.depth >= maxDepth {
+			continue
+		}
+
+		// Get all edges from this node
+		edges, err := g.store.GetEdgesFrom(curr.id)
+		if err != nil {
+			continue
+		}
+		edgesTo, err := g.store.GetEdgesTo(curr.id)
+		if err != nil {
+			continue
+		}
+		allEdges := append(edges, edgesTo...)
+
+		// Score and sort neighbors by intent weight
+		type scored struct {
+			id    string
+			score float64
+		}
+		var neighbors []scored
+		for _, e := range allEdges {
+			neighborID := e.ToID
+			if e.ToID == curr.id {
+				neighborID = e.FromID
+			}
+			if visited[neighborID] {
+				continue
+			}
+			edgeBoost := weights.EdgeWeight(e.Type)
+			score := curr.score * edgeBoost * e.Weight
+			neighbors = append(neighbors, scored{neighborID, score})
+		}
+
+		// Sort by score descending (simple insertion sort for small lists)
+		for i := 1; i < len(neighbors); i++ {
+			for j := i; j > 0 && neighbors[j].score > neighbors[j-1].score; j-- {
+				neighbors[j], neighbors[j-1] = neighbors[j-1], neighbors[j]
+			}
+		}
+
+		for _, n := range neighbors {
+			if !visited[n.id] {
+				visited[n.id] = true
+				result = append(result, n.id)
+				queue = append(queue, candidate{id: n.id, score: n.score, depth: curr.depth + 1})
+			}
+		}
+	}
+	return result, nil
 }
 
 // Impact returns node IDs affected by a file change, walking backwards through the graph.

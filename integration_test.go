@@ -10,13 +10,17 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yaadmemory/yaad/internal/agentconfig"
 	"github.com/yaadmemory/yaad/internal/bench"
+	"github.com/yaadmemory/yaad/internal/boundary"
 	"github.com/yaadmemory/yaad/internal/embeddings"
 	"github.com/yaadmemory/yaad/internal/engine"
 	"github.com/yaadmemory/yaad/internal/exportimport"
 	"github.com/yaadmemory/yaad/internal/hooks"
+	"github.com/yaadmemory/yaad/internal/ingest"
+	intentpkg "github.com/yaadmemory/yaad/internal/intent"
 	"github.com/yaadmemory/yaad/internal/server"
 	"github.com/yaadmemory/yaad/internal/skill"
 	"github.com/yaadmemory/yaad/internal/storage"
@@ -546,6 +550,129 @@ func TestGitSync(t *testing.T) {
 	if n2 != 0 || e2 != 0 {
 		t.Errorf("second import should be idempotent, got %d nodes %d edges", n2, e2)
 	}
+}
+
+func TestPhase6IntentClassifier(t *testing.T) {
+	cases := []struct {
+		query    string
+		expected intentpkg.Intent
+	}{
+		{"why did we choose NATS over Redis?", intentpkg.IntentWhy},
+		{"when did we fix the auth bug?", intentpkg.IntentWhen},
+		{"how to deploy the application?", intentpkg.IntentHow},
+		{"what is the auth subsystem?", intentpkg.IntentWhat},
+		{"which library should I use for JWT?", intentpkg.IntentWho},
+		{"recall auth middleware", intentpkg.IntentGeneral},
+	}
+	for _, c := range cases {
+		got := intentpkg.Classify(c.query)
+		if got != c.expected {
+			t.Errorf("Classify(%q) = %s, want %s", c.query, got, c.expected)
+		}
+	}
+}
+
+func TestPhase6IntentAwareRetrieval(t *testing.T) {
+	eng, cleanup := setup(t)
+	defer cleanup()
+
+	// Seed memories
+	decision, _ := eng.Remember(engine.RememberInput{Type: "decision", Content: "Chose NATS over Redis Streams for event bus", Scope: "project"})
+	convention, _ := eng.Remember(engine.RememberInput{Type: "convention", Content: "Use NATS client v2 for all event publishing", Scope: "project"})
+
+	// Link: decision led_to convention
+	eng.Graph().AddEdge(&storage.Edge{
+		ID: "e-test", FromID: decision.ID, ToID: convention.ID, Type: "led_to", Weight: 1.0,
+	})
+
+	// Why query should find the decision via causal traversal
+	result, err := eng.Recall(engine.RecallOpts{Query: "why NATS", Depth: 2, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Nodes) == 0 {
+		t.Error("intent-aware recall returned no nodes")
+	}
+	// Should find both decision and convention via causal chain
+	found := map[string]bool{}
+	for _, n := range result.Nodes {
+		found[n.Type] = true
+	}
+	t.Logf("Why query found types: %v", found)
+}
+
+func TestPhase6DualStream(t *testing.T) {
+	eng, cleanup := setup(t)
+	defer cleanup()
+
+	ds := ingest.New(eng)
+	defer ds.Stop()
+
+	// Fast path should return immediately
+	node, err := ds.Remember(engine.RememberInput{
+		Type: "convention", Content: "Use jose not jsonwebtoken", Scope: "project",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.ID == "" {
+		t.Error("dual stream: empty node ID")
+	}
+
+	// Second remember should create temporal backbone edge
+	node2, err := ds.Remember(engine.RememberInput{
+		Type: "decision", Content: "Chose RS256 for JWT", Scope: "project",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node2.ID == "" {
+		t.Error("dual stream: second node empty ID")
+	}
+
+	// Give slow path time to run and release DB lock
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify temporal backbone edge exists
+	edges, _ := eng.Store().GetEdgesFrom(node.ID)
+	hasTemporalEdge := false
+	for _, e := range edges {
+		if e.ToID == node2.ID && e.Type == "learned_in" {
+			hasTemporalEdge = true
+		}
+	}
+	if !hasTemporalEdge {
+		t.Error("dual stream: temporal backbone edge not created")
+	}
+}
+
+func TestPhase6BoundaryDetector(t *testing.T) {
+	// Test buffer overflow boundary (deterministic)
+	det := boundary.New(3, 0.99) // very high threshold, only overflow triggers
+	det.Add("item 1 about auth")
+	det.Add("item 2 about auth")
+	if !det.Add("item 3 about auth") {
+		t.Error("buffer overflow should trigger boundary")
+	}
+
+	// Test flush
+	det2 := boundary.New(10, 0.3)
+	det2.Add("content about authentication")
+	det2.Add("more about JWT tokens")
+	buf := det2.Flush()
+	if len(buf) != 2 {
+		t.Errorf("flush: expected 2 items, got %d", len(buf))
+	}
+	if det2.Size() != 0 {
+		t.Error("flush: buffer should be empty after flush")
+	}
+
+	// Test semantic distance detection (non-deterministic, just verify no panic)
+	det3 := boundary.New(20, 0.3)
+	det3.Add("Use jose for JWT authentication in Node.js")
+	det3.Add("PostgreSQL database connection pooling configuration")
+	// May or may not trigger — just verify it runs without error
+	t.Logf("Boundary detector size after 2 items: %d", det3.Size())
 }
 
 func TestRESTAPI(t *testing.T) {

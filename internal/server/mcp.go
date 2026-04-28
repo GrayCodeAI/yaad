@@ -8,6 +8,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	intentpkg "github.com/yaadmemory/yaad/internal/intent"
 	"github.com/yaadmemory/yaad/internal/engine"
 	"github.com/yaadmemory/yaad/internal/storage"
 )
@@ -126,6 +127,12 @@ func (s *MCPServer) registerTools() {
 		mcp.WithDescription("Show potentially stale memory subgraphs"),
 		mcp.WithString("project", mcp.Description("Project path")),
 	), s.handleStale)
+
+	// yaad_intent (Phase 6: intent classification)
+	add(mcp.NewTool("yaad_intent",
+		mcp.WithDescription("Classify query intent (Why/When/Who/How/What/General) for intent-aware retrieval"),
+		mcp.WithString("query", mcp.Required(), mcp.Description("Query to classify")),
+	), s.handleIntent)
 }
 
 // --- Tool handlers ---
@@ -253,6 +260,17 @@ func (s *MCPServer) handleSessions(_ context.Context, req mcp.CallToolRequest) (
 func (s *MCPServer) handleStale(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// Placeholder — full git-aware staleness is Phase 2
 	return mcp.NewToolResultText("staleness detection available in Phase 2"), nil
+}
+
+func (s *MCPServer) handleIntent(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	query := strArg(req, "query")
+	i := intentpkg.Classify(query)
+	weights := intentpkg.Weights(i)
+	return jsonResult(map[string]any{
+		"query":   query,
+		"intent":  i.String(),
+		"weights": weights,
+	})
 }
 
 // --- helpers ---

@@ -6,6 +6,7 @@ import (
 
 	"github.com/yaadmemory/yaad/internal/embeddings"
 	"github.com/yaadmemory/yaad/internal/graph"
+	"github.com/yaadmemory/yaad/internal/intent"
 	"github.com/yaadmemory/yaad/internal/storage"
 )
 
@@ -38,6 +39,9 @@ func (h *HybridSearch) Search(ctx context.Context, query string, opts RecallOpts
 		opts.Limit = 10
 	}
 
+	// Classify query intent (MAGMA: intent-aware routing)
+	queryIntent := intent.Classify(query)
+
 	// Stage 1a: BM25 seed nodes
 	bm25Nodes, _ := h.store.SearchNodes(query, opts.Limit*2)
 	bm25Ranks := rankMap(bm25Nodes)
@@ -54,11 +58,12 @@ func (h *HybridSearch) Search(ctx context.Context, query string, opts RecallOpts
 	// Collect all seed IDs
 	seedIDs := mergeKeys(bm25Ranks, vectorRanks)
 
-	// Stage 2: Graph expansion from seeds
+	// Stage 2: Intent-aware graph expansion (MAGMA: adaptive traversal)
 	graphRanks := map[string]int{}
 	rank := 1
 	for _, id := range seedIDs {
-		ids, err := h.graph.BFS(id, opts.Depth)
+		// Use IntentBFS instead of plain BFS — edges weighted by query intent
+		ids, err := h.graph.IntentBFS(id, opts.Depth, queryIntent)
 		if err != nil {
 			continue
 		}

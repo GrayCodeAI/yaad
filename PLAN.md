@@ -994,6 +994,63 @@ yaad/
 - [ ] Session replay
 - [ ] WebSocket/SSE streaming for real-time memory updates
 
+### Phase 6: World-Class Retrieval (MAGMA + GAM inspired)
+
+Based on two April 2026 papers:
+- **MAGMA** (arxiv:2601.03236) — Multi-Graph Agentic Memory Architecture, 0.700 on LoCoMo
+- **GAM** (arxiv:2604.12285) — Hierarchical Graph-based Agentic Memory, 40.0 F1 on LoCoMo
+
+#### Key Innovations
+
+**Intent-Aware Retrieval (MAGMA)**
+```
+Query: "Why did we choose NATS?"
+  → Intent: Why → boost causal edges (caused_by, led_to)
+  → Traverse: decision → convention → bug (causal chain)
+
+Query: "When did we fix the auth bug?"
+  → Intent: When → boost temporal edges (learned_in, session order)
+  → Traverse: temporal backbone
+
+Query: "What is the auth subsystem?"
+  → Intent: What → boost entity/spec edges
+  → Traverse: entity → spec → convention
+```
+
+**Dual-Stream Ingestion (MAGMA + GAM)**
+```
+Remember("Use jose for JWT")
+  │
+  ├── FAST PATH (sync, <1ms)
+  │   ├── Privacy filter
+  │   ├── Create node
+  │   ├── Add temporal edge (temporal backbone)
+  │   └── Return immediately ← agent not blocked
+  │
+  └── SLOW PATH (async goroutine)
+      ├── Extract entities (LLM or regex)
+      ├── Infer causal edges (LLM: "what caused this?")
+      ├── Link entity graph
+      └── Update semantic edges
+```
+
+**Semantic Boundary Detection (GAM)**
+```
+Session buffer fills with events
+  → LLM (or heuristic) detects topic shift
+  → Consolidate buffer → topic node
+  → Reset buffer
+  → Long-term memory only updated at semantic boundaries
+  → Prevents transient noise contaminating long-term memory
+```
+
+- [ ] Intent classifier (Why/When/Who/How/What) — regex + keyword, no LLM needed
+- [ ] Intent-aware edge weight boosting in graph traversal
+- [ ] Dual-stream ingestion (fast sync + slow async goroutine)
+- [ ] Semantic boundary detection (heuristic: cosine distance between consecutive summaries)
+- [ ] Topic consolidation at boundaries (not just at session end)
+- [ ] Multi-factor re-ranking: semantic × temporal × confidence × role
+
 ### Phase 5: Team & Scale
 - [ ] Team memory sharing (namespaced)
 - [ ] Skill/procedural memory (replayable workflows)

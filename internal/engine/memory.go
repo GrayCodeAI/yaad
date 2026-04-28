@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/yaadmemory/yaad/internal/graph"
+	"github.com/yaadmemory/yaad/internal/intent"
 	"github.com/yaadmemory/yaad/internal/privacy"
 	"github.com/yaadmemory/yaad/internal/storage"
 )
@@ -163,19 +164,29 @@ func (e *Engine) Recall(opts RecallOpts) (*RecallResult, error) {
 		return &RecallResult{}, nil
 	}
 
-	// Stage 2: Graph expansion from seed nodes
+	// Classify query intent (MAGMA: intent-aware routing)
+	queryIntent := intent.Classify(opts.Query)
+
+	// Stage 2: Intent-aware graph expansion
 	nodeMap := map[string]*storage.Node{}
 	var allEdges []*storage.Edge
 	for _, seed := range seeds {
 		nodeMap[seed.ID] = seed
-		sg, err := e.graph.ExtractSubgraph(seed.ID, opts.Depth)
+		// Use IntentBFS for intent-aware traversal
+		ids, err := e.graph.IntentBFS(seed.ID, opts.Depth, queryIntent)
 		if err != nil {
 			continue
 		}
-		for _, n := range sg.Nodes {
-			nodeMap[n.ID] = n
+		for _, id := range ids {
+			if n, err := e.store.GetNode(id); err == nil {
+				nodeMap[n.ID] = n
+			}
 		}
-		allEdges = append(allEdges, sg.Edges...)
+		// Also get edges for the subgraph
+		sg, err := e.graph.ExtractSubgraph(seed.ID, opts.Depth)
+		if err == nil {
+			allEdges = append(allEdges, sg.Edges...)
+		}
 	}
 
 	// Stage 3: Rank by confidence × recency

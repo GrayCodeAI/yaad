@@ -939,7 +939,7 @@ yaad/
 ├── go.mod
 ├── go.sum
 ├── Makefile
-└── LICENSE                        # Apache-2.0
+└── LICENSE                        # MIT
 ```
 
 ## Roadmap
@@ -1062,4 +1062,4 @@ See [COMPARISON.md](COMPARISON.md) for full feature matrix against 8 OSS project
 
 ## License
 
-Apache-2.0
+MIT

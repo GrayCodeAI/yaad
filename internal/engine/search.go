@@ -31,6 +31,8 @@ type ScoredNode struct {
 }
 
 // Search runs hybrid search and returns ranked nodes.
+// 4-path retrieval: BM25 + vector + graph (intent-aware) + temporal recency
+// Based on Hindsight's multi-strategy approach.
 func (h *HybridSearch) Search(ctx context.Context, query string, opts RecallOpts) ([]*ScoredNode, error) {
 	if opts.Depth == 0 {
 		opts.Depth = 2
@@ -42,11 +44,11 @@ func (h *HybridSearch) Search(ctx context.Context, query string, opts RecallOpts
 	// Classify query intent (MAGMA: intent-aware routing)
 	queryIntent := intent.Classify(query)
 
-	// Stage 1a: BM25 seed nodes
+	// Path 1: BM25 seed nodes
 	bm25Nodes, _ := h.store.SearchNodes(query, opts.Limit*2)
 	bm25Ranks := rankMap(bm25Nodes)
 
-	// Stage 1b: Vector seed nodes (if provider available)
+	// Path 2: Vector seed nodes (if provider available)
 	vectorRanks := map[string]int{}
 	if h.provider != nil {
 		vec, err := h.provider.Embed(ctx, query)
@@ -55,14 +57,10 @@ func (h *HybridSearch) Search(ctx context.Context, query string, opts RecallOpts
 		}
 	}
 
-	// Collect all seed IDs
-	seedIDs := mergeKeys(bm25Ranks, vectorRanks)
-
-	// Stage 2: Intent-aware graph expansion (MAGMA: adaptive traversal)
+	// Path 3: Intent-aware graph expansion (MAGMA: adaptive traversal)
 	graphRanks := map[string]int{}
 	rank := 1
-	for _, id := range seedIDs {
-		// Use IntentBFS instead of plain BFS — edges weighted by query intent
+	for _, id := range mergeKeys(bm25Ranks, vectorRanks) {
 		ids, err := h.graph.IntentBFS(id, opts.Depth, queryIntent)
 		if err != nil {
 			continue
@@ -75,8 +73,27 @@ func (h *HybridSearch) Search(ctx context.Context, query string, opts RecallOpts
 		}
 	}
 
-	// Stage 3: RRF fusion
-	allIDs := mergeKeys(bm25Ranks, vectorRanks, graphRanks)
+	// Path 4: Temporal recency (Hindsight-inspired)
+	// For When/temporal queries, boost recently accessed nodes
+	temporalRanks := map[string]int{}
+	if queryIntent == intent.IntentWhen {
+		recent, _ := h.store.ListNodes(storage.NodeFilter{Project: opts.Project})
+		// Sort by accessed_at descending (most recent first)
+		for i := 1; i < len(recent); i++ {
+			for j := i; j > 0 && recent[j].AccessedAt.After(recent[j-1].AccessedAt); j-- {
+				recent[j], recent[j-1] = recent[j-1], recent[j]
+			}
+		}
+		for i, n := range recent {
+			if i >= opts.Limit*2 {
+				break
+			}
+			temporalRanks[n.ID] = i + 1
+		}
+	}
+
+	// Stage 3: RRF fusion of all 4 paths
+	allIDs := mergeKeys(bm25Ranks, vectorRanks, graphRanks, temporalRanks)
 	scored := make([]*ScoredNode, 0, len(allIDs))
 	for _, id := range allIDs {
 		node, err := h.store.GetNode(id)
@@ -89,7 +106,7 @@ func (h *HybridSearch) Search(ctx context.Context, query string, opts RecallOpts
 		if opts.Project != "" && node.Project != opts.Project {
 			continue
 		}
-		rrf := rrfScore(bm25Ranks[id], vectorRanks[id], graphRanks[id])
+		rrf := rrfScore(bm25Ranks[id], vectorRanks[id], graphRanks[id], temporalRanks[id])
 		scored = append(scored, &ScoredNode{Node: node, Score: rrf})
 	}
 

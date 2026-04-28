@@ -98,13 +98,28 @@ func findRank(nodes []*storage.Node, qa QA) int {
 	return 0
 }
 
-// DefaultQAs returns a built-in set of coding-agent memory QA pairs for smoke testing.
+// DefaultQAs returns a built-in set of coding-agent memory QA pairs.
+// Covers the same categories as LongMemEval: single-hop, multi-hop, temporal, preference.
 func DefaultQAs() []QA {
 	return []QA{
+		// Single-hop: direct fact retrieval
 		{Question: "which JWT library should I use", ExpectedContent: "jose"},
 		{Question: "how to run tests", ExpectedContent: "test"},
-		{Question: "auth middleware bug", ExpectedContent: "auth"},
-		{Question: "architecture decision event bus", ExpectedContent: "NATS"},
+		{Question: "what is the auth middleware bug", ExpectedContent: "auth"},
+		{Question: "which event bus did we choose", ExpectedContent: "NATS"},
 		{Question: "token refresh issue", ExpectedContent: "refresh"},
+
+		// Multi-hop: requires traversing edges
+		{Question: "why did we choose NATS", ExpectedContent: "backpressure"},
+		{Question: "what caused the token refresh race", ExpectedContent: "mutex"},
+		{Question: "which library is used for JWT compliance", ExpectedContent: "jose"},
+
+		// Temporal: recency-aware
+		{Question: "what was the last architecture decision", ExpectedContent: "NATS"},
+		{Question: "recent bug patterns in auth", ExpectedContent: "auth"},
+
+		// Preference: user-specific
+		{Question: "what testing framework do we use", ExpectedContent: "pnpm"},
+		{Question: "what are the coding conventions", ExpectedContent: "jose"},
 	}
 }

@@ -9,8 +9,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-a78bfa.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go)](go.mod)
 [![Pure Go](https://img.shields.io/badge/CGO-disabled-68d391)](Makefile)
-[![Tests](https://img.shields.io/badge/Tests-17%2F17-68d391)](integration_test.go)
-[![R@5](https://img.shields.io/badge/R%405-100%25-f6ad55)](internal/bench/bench.go)
+[![Tests](https://img.shields.io/badge/Tests-17%2F17-68d391)](integration_test.go)[![R@5](https://img.shields.io/badge/R%405-83%25-f6ad55)](internal/bench/bench.go)
 [![CI](https://img.shields.io/github/actions/workflow/status/GrayCodeAI/yaad/ci.yml?label=ci&logo=github)](https://github.com/GrayCodeAI/yaad/actions)
 
 <br/>
@@ -156,19 +155,20 @@ Session ends
 
 ## 📊 Benchmark
 
-> Evaluated on a realistic coding project (13 memories, 5 retrieval questions)
+> Evaluated on a realistic coding project (12 memories, 12 questions: single-hop, multi-hop, temporal, preference)
+> 4-path retrieval: BM25 + vector + graph (intent-aware) + temporal recency, fused with RRF
 
 <div align="center">
 
 | Metric | Score |
 |:---:|:---:|
-| **R@1** | 60.0% |
-| **R@3** | 100.0% |
-| **R@5** | 100.0% |
-| **R@10** | 100.0% |
-| **MRR** | 0.767 |
-| **Avg tokens/query** | 81 |
-| **Latency** | ~50ms |
+| **R@1** | 25.0% |
+| **R@3** | 83.3% |
+| **R@5** | 83.3% |
+| **R@10** | 83.3% |
+| **MRR** | 0.528 |
+| **Avg tokens/query** | 76 |
+| **Latency** | ~80ms |
 
 </div>
 

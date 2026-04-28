@@ -18,11 +18,18 @@ import (
 type MCPServer struct {
 	eng    *engine.Engine
 	server *mcpserver.MCPServer
+	// ToolProfile controls which tools are exposed.
+	// "agent" = 8 core tools (saves ~800 tokens), "all" = all 15 tools.
+	ToolProfile string
 }
 
-// NewMCPServer creates an MCP server with all yaad tools registered.
-func NewMCPServer(eng *engine.Engine) *MCPServer {
-	s := &MCPServer{eng: eng}
+// NewMCPServer creates an MCP server with yaad tools registered.
+// profile: "agent" (8 core tools, saves tokens) or "all" (15 tools, default).
+func NewMCPServer(eng *engine.Engine, profile string) *MCPServer {
+	if profile == "" {
+		profile = "all"
+	}
+	s := &MCPServer{eng: eng, ToolProfile: profile}
 	s.server = mcpserver.NewMCPServer("yaad", "0.1.0",
 		mcpserver.WithToolCapabilities(true),
 		mcpserver.WithResourceCapabilities(true, false),
@@ -89,8 +96,8 @@ func (s *MCPServer) registerTools() {
 		mcp.WithString("id", mcp.Required(), mcp.Description("Edge ID to remove")),
 	), s.handleUnlink)
 
-	// yaad_subgraph
-	add(mcp.NewTool("yaad_subgraph",
+	// yaad_subgraph (extended — only in "all" profile)
+	if s.ToolProfile == "all" {	add(mcp.NewTool("yaad_subgraph",
 		mcp.WithDescription("Get subgraph around a node via BFS"),
 		mcp.WithString("id", mcp.Required(), mcp.Description("Center node ID")),
 		mcp.WithNumber("depth", mcp.Description("BFS depth (default 2)")),
@@ -140,6 +147,7 @@ func (s *MCPServer) registerTools() {
 		mcp.WithDescription("Get auto-maintained user/project profile: static facts + dynamic recent context"),
 		mcp.WithString("project", mcp.Description("Project path")),
 	), s.handleProfile)
+	} // end extended tools (ToolProfile == "all")
 }
 
 // --- Tool handlers ---

@@ -234,10 +234,12 @@ var statusCmd = &cobra.Command{
 var mcpCmd = &cobra.Command{
 	Use:   "mcp",
 	Short: "Start MCP server on stdio",
+	Long:  `Tool profiles: --tools=agent (8 core tools, saves ~800 tokens) or --tools=all (15 tools, default)`,
 	Run: func(cmd *cobra.Command, args []string) {
 		eng := openEngine()
 		defer eng.Store().Close()
-		mcp := server.NewMCPServer(eng)
+		profile, _ := cmd.Flags().GetString("tools")
+		mcp := server.NewMCPServer(eng, profile)
 		if err := mcp.ServeStdio(); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
@@ -283,6 +285,7 @@ func init() {
 	recallCmd.Flags().IntP("page", "p", 1, "Page number")
 	subgraphCmd.Flags().IntP("depth", "d", 2, "BFS depth")
 	serveCmd.Flags().String("addr", ":3456", "Listen address")
+	mcpCmd.Flags().String("tools", "all", "Tool profile: agent (8 core) or all (15 tools)")
 	benchCmd.Flags().Bool("extended", false, "Run extended 28-question benchmark")
 	syncCmd.Flags().Bool("status", false, "Show sync status only")
 	syncCmd.Flags().Bool("import", false, "Import only (don't export)")

@@ -16,6 +16,7 @@ import (
 	"github.com/GrayCodeAI/yaad/internal/bridge"
 	"github.com/GrayCodeAI/yaad/internal/embeddings"
 	"github.com/GrayCodeAI/yaad/internal/engine"
+	"github.com/GrayCodeAI/yaad/internal/utils"
 	"github.com/GrayCodeAI/yaad/internal/exportimport"
 	"github.com/GrayCodeAI/yaad/internal/hooks"
 	"github.com/GrayCodeAI/yaad/internal/server"
@@ -114,7 +115,7 @@ var rememberCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("✓ Remembered [%s] %s (id: %s)\n", node.Type, truncate(node.Content, 60), node.ID[:8])
+		fmt.Printf("✓ Remembered [%s] %s (id: %s)\n", node.Type, truncate(node.Content, 60), utils.ShortID(node.ID))
 	},
 }
 
@@ -156,7 +157,7 @@ var recallCmd = &cobra.Command{
 		}
 		fmt.Printf("Page %d (%d-%d of %d results)\n", page, start+1, end, len(result.Nodes))
 		for _, n := range nodes {
-			fmt.Printf("[%s] %s (confidence: %.2f, id: %s)\n", n.Type, truncate(n.Content, 70), n.Confidence, n.ID[:8])
+			fmt.Printf("[%s] %s (confidence: %.2f, id: %s)\n", n.Type, truncate(n.Content, 70), n.Confidence, utils.ShortID(n.ID))
 		}
 		if len(result.Edges) > 0 {
 			fmt.Printf("\n%d relationships found\n", len(result.Edges))
@@ -172,7 +173,7 @@ var linkCmd = &cobra.Command{
 		eng := openEngine()
 		defer eng.Store().Close()
 		edge := &storage.Edge{
-			ID:     fmt.Sprintf("%s-%s-%s", args[0][:8], args[1][:8], args[2]),
+			ID:     fmt.Sprintf("%s-%s-%s", utils.ShortID(args[0]), utils.ShortID(args[1]), args[2]),
 			FromID: args[0],
 			ToID:   args[1],
 			Type:   args[2],
@@ -182,7 +183,7 @@ var linkCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("✓ Linked %s →[%s]→ %s\n", args[0][:8], args[2], args[1][:8])
+		fmt.Printf("✓ Linked %s →[%s]→ %s\n", utils.ShortID(args[0]), args[2], utils.ShortID(args[1]))
 	},
 }
 
@@ -204,7 +205,7 @@ var subgraphCmd = &cobra.Command{
 			fmt.Printf("  [%s] %s\n", n.Type, truncate(n.Content, 60))
 		}
 		for _, e := range sg.Edges {
-			fmt.Printf("  %s →[%s]→ %s\n", e.FromID[:8], e.Type, e.ToID[:8])
+			fmt.Printf("  %s →[%s]→ %s\n", utils.ShortID(e.FromID), e.Type, utils.ShortID(e.ToID))
 		}
 	},
 }
@@ -348,7 +349,7 @@ var embedCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("✓ Embedded node %s (%d dims, provider: %s)\n", args[0][:8], len(vec), provider.Name())
+		fmt.Printf("✓ Embedded node %s (%d dims, provider: %s)\n", utils.ShortID(args[0]), len(vec), provider.Name())
 	},
 }
 
@@ -536,7 +537,7 @@ var replayCmd = &cobra.Command{
 			fmt.Println("No events found for session:", args[0])
 			return
 		}
-		fmt.Printf("Session %s: %d events\n", args[0][:8], len(events))
+		fmt.Printf("Session %s: %d events\n", utils.ShortID(args[0]), len(events))
 		for _, e := range events {
 			fmt.Printf("  [%s] %s\n", e.CreatedAt.Format("15:04:05"), truncate(e.Data, 80))
 		}
@@ -628,7 +629,7 @@ var skillStoreCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("✓ Stored skill %q (id: %s)\n", sk.Name, node.ID[:8])
+		fmt.Printf("✓ Stored skill %q (id: %s)\n", sk.Name, utils.ShortID(node.ID))
 	},
 }
 

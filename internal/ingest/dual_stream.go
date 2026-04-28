@@ -10,13 +10,12 @@
 package ingest
 
 import (
-	"context"
 	"log"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/GrayCodeAI/yaad/internal/engine"
+	"github.com/GrayCodeAI/yaad/internal/utils"
 	"github.com/GrayCodeAI/yaad/internal/graph"
 	"github.com/GrayCodeAI/yaad/internal/storage"
 )
@@ -111,10 +110,6 @@ func (ds *DualStream) startWorker() {
 // No LLM calls — Yaad is a memory layer, not an LLM client.
 // The coding agent handles LLM; Yaad handles memory structure.
 func (ds *DualStream) slowPath(job SlowPathJob) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = ctx
-
 	node, err := job.Eng.Store().GetNode(job.NodeID)
 	if err != nil {
 		return
@@ -156,7 +151,7 @@ func (ds *DualStream) slowPath(job SlowPathJob) {
 		}
 	}
 
-	log.Printf("[yaad:slow] processed node %s (%s)", job.NodeID[:8], node.Type)
+	log.Printf("[yaad:slow] processed node %s (%s)", utils.ShortID(job.NodeID), node.Type)
 }
 
 // Stop gracefully shuts down the slow-path worker.

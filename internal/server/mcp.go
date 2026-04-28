@@ -10,6 +10,7 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	intentpkg "github.com/GrayCodeAI/yaad/internal/intent"
 	"github.com/GrayCodeAI/yaad/internal/engine"
+	"github.com/GrayCodeAI/yaad/internal/utils"
 	"github.com/GrayCodeAI/yaad/internal/storage"
 )
 
@@ -189,7 +190,7 @@ func (s *MCPServer) handleLink(_ context.Context, req mcp.CallToolRequest) (*mcp
 		Type:   strArg(req, "type"),
 		Weight: 1.0,
 	}
-	edge.ID = fmt.Sprintf("%s-%s-%s", edge.FromID[:8], edge.ToID[:8], edge.Type)
+	edge.ID = fmt.Sprintf("%s-%s-%s", utils.ShortID(edge.FromID), utils.ShortID(edge.ToID), edge.Type)
 	if err := s.eng.Graph().AddEdge(edge); err != nil {
 		return nil, err
 	}

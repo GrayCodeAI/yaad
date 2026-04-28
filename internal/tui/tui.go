@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/GrayCodeAI/yaad/internal/engine"
+	"github.com/GrayCodeAI/yaad/internal/utils"
 	intentpkg "github.com/GrayCodeAI/yaad/internal/intent"
 	"github.com/GrayCodeAI/yaad/internal/storage"
 )
@@ -337,7 +338,7 @@ func (m Model) viewDetail() string {
 	sb.WriteString(titleStyle.Render("Node Detail") + "\n\n")
 	sb.WriteString(fmt.Sprintf("  %s  %s\n",
 		lipgloss.NewStyle().Foreground(color).Bold(true).Render(m.detail.Type),
-		dimStyle.Render("id: "+m.detail.ID[:8]),
+		dimStyle.Render("id: "+utils.ShortID(m.detail.ID)),
 	))
 	sb.WriteString(fmt.Sprintf("  confidence: %.0f%%  tier: %d  access: %d\n\n",
 		m.detail.Confidence*100, m.detail.Tier, m.detail.AccessCount))
@@ -362,7 +363,7 @@ func (m Model) viewDetail() string {
 		for _, e := range m.edges {
 			sb.WriteString(fmt.Sprintf("  %s → %s\n",
 				lipgloss.NewStyle().Foreground(blue).Render(e.Type),
-				dimStyle.Render(e.ToID[:8]),
+				dimStyle.Render(utils.ShortID(e.ToID)),
 			))
 		}
 	}

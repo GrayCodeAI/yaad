@@ -108,11 +108,17 @@ func DefaultQAs() []QA {
 		{Question: "what is the auth middleware bug", ExpectedContent: "auth"},
 		{Question: "which event bus did we choose", ExpectedContent: "NATS"},
 		{Question: "token refresh issue", ExpectedContent: "refresh"},
+		{Question: "what JWT algorithm for compliance", ExpectedContent: "RS256"},
+		{Question: "database query performance bug", ExpectedContent: "DataLoader"},
+		{Question: "NATS connection issue", ExpectedContent: "keepalive"},
+		{Question: "auth subsystem spec", ExpectedContent: "jose"},
+		{Question: "rate limiting task", ExpectedContent: "rate"},
 
 		// Multi-hop: requires traversing edges
 		{Question: "why did we choose NATS", ExpectedContent: "backpressure"},
 		{Question: "what caused the token refresh race", ExpectedContent: "mutex"},
 		{Question: "which library is used for JWT compliance", ExpectedContent: "jose"},
+		{Question: "what decision led to the jose convention", ExpectedContent: "jose"},
 
 		// Temporal: recency-aware
 		{Question: "what was the last architecture decision", ExpectedContent: "NATS"},
@@ -122,4 +128,23 @@ func DefaultQAs() []QA {
 		{Question: "what testing framework do we use", ExpectedContent: "pnpm"},
 		{Question: "what are the coding conventions", ExpectedContent: "jose"},
 	}
+}
+
+// CodingBenchQAs returns an extended set of 50 coding-specific QA pairs
+// for more rigorous evaluation. Seed your DB with realistic coding memories first.
+func CodingBenchQAs() []QA {
+	base := DefaultQAs()
+	extended := []QA{
+		{Question: "TypeScript export style", ExpectedContent: "Named exports"},
+		{Question: "integration tests for auth", ExpectedContent: "integration"},
+		{Question: "what is the access token expiry", ExpectedContent: "15min"},
+		{Question: "refresh token duration", ExpectedContent: "7d"},
+		{Question: "N+1 query fix", ExpectedContent: "DataLoader"},
+		{Question: "event bus backpressure solution", ExpectedContent: "NATS"},
+		{Question: "JWT signing key type", ExpectedContent: "RS256"},
+		{Question: "auth middleware file location", ExpectedContent: "auth.ts"},
+		{Question: "test coverage command", ExpectedContent: "coverage"},
+		{Question: "functional programming preference", ExpectedContent: "functional"},
+	}
+	return append(base, extended...)
 }

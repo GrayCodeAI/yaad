@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -287,6 +288,7 @@ func init() {
 	recallCmd.Flags().IntP("limit", "l", 10, "Max results")
 	subgraphCmd.Flags().IntP("depth", "d", 2, "BFS depth")
 	serveCmd.Flags().String("addr", ":3456", "Listen address")
+	benchCmd.Flags().Bool("extended", false, "Run extended 28-question benchmark")
 	syncCmd.Flags().Bool("status", false, "Show sync status only")
 	syncCmd.Flags().Bool("import", false, "Import only (don't export)")
 
@@ -296,7 +298,7 @@ func init() {
 		hookCmd, setupCmd, replayCmd,
 		exportJSONCmd, exportMarkdownCmd, exportObsidianCmd, importJSONCmd,
 		skillStoreCmd, skillListCmd, skillReplayCmd, benchCmd,
-		syncCmd, tuiCmd, intentCmd)
+		syncCmd, tuiCmd, intentCmd, doctorCmd)
 }
 
 func truncate(s string, n int) string {
@@ -658,7 +660,12 @@ var benchCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		eng := openEngine()
 		defer eng.Store().Close()
-		result := bench.Run(eng, bench.DefaultQAs(), 2, 10)
+		extended, _ := cmd.Flags().GetBool("extended")
+		qas := bench.DefaultQAs()
+		if extended {
+			qas = bench.CodingBenchQAs()
+		}
+		result := bench.Run(eng, qas, 2, 10)
 		fmt.Println(result.String())
 	},
 }
@@ -672,6 +679,75 @@ var tuiCmd = &cobra.Command{
 		if err := tui.Run(eng); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
+		}
+	},
+}
+
+var doctorCmd = &cobra.Command{
+	Use:   "doctor",
+	Short: "Diagnose Yaad setup issues",
+	Run: func(cmd *cobra.Command, args []string) {
+		dir, _ := os.Getwd()
+		ok := true
+		check := func(label string, pass bool, fix string) {
+			if pass {
+				fmt.Printf("  ✅ %s\n", label)
+			} else {
+				fmt.Printf("  ❌ %s\n     Fix: %s\n", label, fix)
+				ok = false
+			}
+		}
+
+		fmt.Printf("yaad doctor — %s\n\n", dir)
+
+		// 1. .yaad/ directory
+		_, err := os.Stat(filepath.Join(dir, ".yaad"))
+		check(".yaad/ directory exists", err == nil, "run: yaad init")
+
+		// 2. DB file
+		dbPath := filepath.Join(dir, ".yaad", "yaad.db")
+		_, err = os.Stat(dbPath)
+		check("yaad.db exists", err == nil, "run: yaad init")
+
+		// 3. DB readable
+		if err == nil {
+			store, err2 := storage.NewStore(dbPath)
+			if err2 == nil {
+				store.Close()
+				check("database readable", true, "")
+			} else {
+				check("database readable", false, "delete .yaad/yaad.db and run: yaad init")
+			}
+		}
+
+		// 4. REST server reachable
+		resp, err := http.Get("http://localhost:3456/yaad/health")
+		serverRunning := err == nil && resp.StatusCode == 200
+		if resp != nil {
+			resp.Body.Close()
+		}
+		check("REST server running (:3456)", serverRunning, "run: yaad serve  (in another terminal)")
+
+		// 5. MCP config
+		mcpFiles := []string{".mcp.json", "opencode.json", ".codex/config.yaml"}
+		hasMCP := false
+		for _, f := range mcpFiles {
+			if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
+				hasMCP = true
+				break
+			}
+		}
+		check("agent MCP config found", hasMCP, "run: yaad setup <agent>  (e.g. yaad setup hawk)")
+
+		// 6. Git repo
+		_, err = os.Stat(filepath.Join(dir, ".git"))
+		check("git repository (for staleness detection)", err == nil, "run: git init")
+
+		fmt.Println()
+		if ok {
+			fmt.Println("✅ All checks passed. Yaad is ready!")
+		} else {
+			fmt.Println("⚠️  Some checks failed. Fix the issues above and re-run: yaad doctor")
 		}
 	},
 }

@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/GrayCodeAI/yaad/internal/engine"
+	intentpkg "github.com/GrayCodeAI/yaad/internal/intent"
 	"github.com/GrayCodeAI/yaad/internal/storage"
 )
 
@@ -278,7 +279,24 @@ func (m Model) viewDashboard() string {
 func (m Model) viewSearch() string {
 	var sb strings.Builder
 	sb.WriteString(titleStyle.Render("Search") + "\n\n")
-	sb.WriteString("  " + m.input.View() + "\n\n")
+	sb.WriteString("  " + m.input.View() + "\n")
+
+	// Show detected intent
+	if q := m.input.Value(); q != "" {
+		i := intentpkg.Classify(q)
+		intentColor := map[intentpkg.Intent]lipgloss.Color{
+			intentpkg.IntentWhy:     red,
+			intentpkg.IntentWhen:    blue,
+			intentpkg.IntentWho:     yellow,
+			intentpkg.IntentHow:     purple,
+			intentpkg.IntentWhat:    green,
+			intentpkg.IntentGeneral: gray,
+		}[i]
+		sb.WriteString("  " + lipgloss.NewStyle().Foreground(intentColor).Render(
+			fmt.Sprintf("Intent: %s", i.String()),
+		) + "\n")
+	}
+	sb.WriteString("\n")
 
 	if m.err != nil {
 		sb.WriteString(lipgloss.NewStyle().Foreground(red).Render("  Error: "+m.err.Error()) + "\n")

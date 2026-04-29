@@ -3,6 +3,7 @@
 package compact
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -24,8 +25,8 @@ func New(store storage.Storage, maxTokens int) *Compactor {
 }
 
 // NeedsCompaction returns true if total content exceeds the token budget.
-func (c *Compactor) NeedsCompaction(project string) (bool, int) {
-	nodes, _ := c.store.ListNodes(storage.NodeFilter{Project: project})
+func (c *Compactor) NeedsCompaction(ctx context.Context, project string) (bool, int) {
+	nodes, _ := c.store.ListNodes(ctx, storage.NodeFilter{Project: project})
 	totalTokens := 0
 	for _, n := range nodes {
 		totalTokens += len(n.Content) / 4 // ~4 chars per token
@@ -35,8 +36,11 @@ func (c *Compactor) NeedsCompaction(project string) (bool, int) {
 
 // Compact merges low-confidence, old memories of the same type into summary nodes.
 // Returns the number of nodes compacted.
-func (c *Compactor) Compact(project string) (int, error) {
-	nodes, err := c.store.ListNodes(storage.NodeFilter{Project: project})
+func (c *Compactor) Compact(ctx context.Context, project string) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	nodes, err := c.store.ListNodes(ctx, storage.NodeFilter{Project: project})
 	if err != nil {
 		return 0, err
 	}
@@ -81,17 +85,17 @@ func (c *Compactor) Compact(project string) (int, error) {
 			Confidence:  0.6,
 			Version:     1,
 		}
-		if err := c.store.CreateNode(summaryNode); err != nil {
+		if err := c.store.CreateNode(ctx, summaryNode); err != nil {
 			continue
 		}
 
 		// Archive compacted nodes
 		for _, id := range ids {
-			old, _ := c.store.GetNode(id)
+			old, _ := c.store.GetNode(ctx, id)
 			if old != nil {
-				c.store.SaveVersion(old.ID, old.Content, "compactor", "compacted into "+summaryNode.ID[:8])
+				c.store.SaveVersion(ctx, old.ID, old.Content, "compactor", "compacted into "+summaryNode.ID[:8])
 				old.Confidence = 0
-				c.store.UpdateNode(old)
+				c.store.UpdateNode(ctx, old)
 				compacted++
 			}
 		}

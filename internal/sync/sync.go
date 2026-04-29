@@ -13,6 +13,7 @@ package sync
 
 import (
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -58,14 +59,14 @@ func New(store storage.Storage, projectDir string) *Syncer {
 
 // Export creates a new chunk from all current nodes/edges and updates the manifest.
 // Returns the chunk hash.
-func (s *Syncer) Export(project string) (string, error) {
-	nodes, err := s.store.ListNodes(storage.NodeFilter{Project: project})
+func (s *Syncer) Export(ctx context.Context, project string) (string, error) {
+	nodes, err := s.store.ListNodes(ctx, storage.NodeFilter{Project: project})
 	if err != nil {
 		return "", err
 	}
 	var edges []*storage.Edge
 	for _, n := range nodes {
-		e, _ := s.store.GetEdgesFrom(n.ID)
+		e, _ := s.store.GetEdgesFrom(ctx, n.ID)
 		edges = append(edges, e...)
 	}
 
@@ -115,7 +116,7 @@ func (s *Syncer) Export(project string) (string, error) {
 
 // Import reads all chunks from the manifest that aren't already imported.
 // Returns counts of imported nodes and edges.
-func (s *Syncer) Import() (int, int, error) {
+func (s *Syncer) Import(ctx context.Context) (int, int, error) {
 	manifest, err := s.loadManifest()
 	if err != nil {
 		return 0, 0, nil // no manifest yet = nothing to import
@@ -129,7 +130,7 @@ func (s *Syncer) Import() (int, int, error) {
 		if imported[chunk.Hash] {
 			continue
 		}
-		n, e, err := s.importChunk(chunk.File)
+		n, e, err := s.importChunk(ctx, chunk.File)
 		if err != nil {
 			continue // skip bad chunks
 		}
@@ -170,7 +171,7 @@ func (s *Syncer) Status() (*Status, error) {
 
 // --- helpers ---
 
-func (s *Syncer) importChunk(relPath string) (int, int, error) {
+func (s *Syncer) importChunk(ctx context.Context, relPath string) (int, int, error) {
 	f, err := os.Open(filepath.Join(s.syncDir, relPath))
 	if err != nil {
 		return 0, 0, err
@@ -194,14 +195,14 @@ func (s *Syncer) importChunk(relPath string) (int, int, error) {
 		case "node":
 			var n storage.Node
 			if json.Unmarshal(rec.Data, &n) == nil {
-				if s.store.CreateNode(&n) == nil {
+				if s.store.CreateNode(ctx, &n) == nil {
 					nodes++
 				}
 			}
 		case "edge":
 			var e storage.Edge
 			if json.Unmarshal(rec.Data, &e) == nil {
-				if s.store.CreateEdge(&e) == nil {
+				if s.store.CreateEdge(ctx, &e) == nil {
 					edges++
 				}
 			}

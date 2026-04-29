@@ -9,6 +9,7 @@
 package mental
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -28,11 +29,14 @@ type Model struct {
 
 // Generate creates a mental model from the current memory graph.
 // No LLM needed — built from high-confidence nodes.
-func Generate(store storage.Storage, project string) (*Model, error) {
+func Generate(ctx context.Context, store storage.Storage, project string) (*Model, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	m := &Model{Project: project}
 
 	// Conventions (hot tier, high confidence)
-	conventions, _ := store.ListNodes(storage.NodeFilter{
+	conventions, _ := store.ListNodes(ctx, storage.NodeFilter{
 		Type: "convention", Project: project, Tier: 1, MinConfidence: 0.5,
 	})
 	for _, n := range conventions {
@@ -40,7 +44,7 @@ func Generate(store storage.Storage, project string) (*Model, error) {
 	}
 
 	// Key decisions
-	decisions, _ := store.ListNodes(storage.NodeFilter{
+	decisions, _ := store.ListNodes(ctx, storage.NodeFilter{
 		Type: "decision", Project: project, MinConfidence: 0.5,
 	})
 	for _, n := range decisions {
@@ -48,7 +52,7 @@ func Generate(store storage.Storage, project string) (*Model, error) {
 	}
 
 	// Active tasks
-	tasks, _ := store.ListNodes(storage.NodeFilter{
+	tasks, _ := store.ListNodes(ctx, storage.NodeFilter{
 		Type: "task", Project: project, MinConfidence: 0.3,
 	})
 	for _, n := range tasks {
@@ -56,7 +60,7 @@ func Generate(store storage.Storage, project string) (*Model, error) {
 	}
 
 	// Known bugs
-	bugs, _ := store.ListNodes(storage.NodeFilter{
+	bugs, _ := store.ListNodes(ctx, storage.NodeFilter{
 		Type: "bug", Project: project, MinConfidence: 0.5,
 	})
 	for _, n := range bugs {
@@ -64,7 +68,7 @@ func Generate(store storage.Storage, project string) (*Model, error) {
 	}
 
 	// Extract stack from entities
-	entities, _ := store.ListNodes(storage.NodeFilter{
+	entities, _ := store.ListNodes(ctx, storage.NodeFilter{
 		Type: "entity", Project: project,
 	})
 	for _, n := range entities {

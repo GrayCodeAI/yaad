@@ -152,7 +152,7 @@ func (s *MCPServer) registerTools() {
 
 // --- Tool handlers ---
 
-func (s *MCPServer) handleRemember(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *MCPServer) handleRemember(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	in := engine.RememberInput{
 		Content: strArg(req, "content"),
 		Type:    strArgOr(req, "type", "decision"),
@@ -161,15 +161,15 @@ func (s *MCPServer) handleRemember(_ context.Context, req mcp.CallToolRequest) (
 		Project: strArg(req, "project"),
 		Scope:   strArgOr(req, "scope", "project"),
 	}
-	node, err := s.eng.Remember(in)
+	node, err := s.eng.Remember(ctx, in)
 	if err != nil {
 		return nil, err
 	}
 	return jsonResult(node)
 }
 
-func (s *MCPServer) handleRecall(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	result, err := s.eng.Recall(engine.RecallOpts{
+func (s *MCPServer) handleRecall(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	result, err := s.eng.Recall(ctx, engine.RecallOpts{
 		Query:   strArg(req, "query"),
 		Depth:   intArgOr(req, "depth", 2),
 		Limit:   intArgOr(req, "limit", 10),
@@ -182,22 +182,22 @@ func (s *MCPServer) handleRecall(_ context.Context, req mcp.CallToolRequest) (*m
 	return jsonResult(result)
 }
 
-func (s *MCPServer) handleContext(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	result, err := s.eng.Context(strArg(req, "project"))
+func (s *MCPServer) handleContext(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	result, err := s.eng.Context(ctx, strArg(req, "project"))
 	if err != nil {
 		return nil, err
 	}
 	return jsonResult(result)
 }
 
-func (s *MCPServer) handleForget(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	if err := s.eng.Forget(strArg(req, "id")); err != nil {
+func (s *MCPServer) handleForget(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if err := s.eng.Forget(ctx, strArg(req, "id")); err != nil {
 		return nil, err
 	}
 	return mcp.NewToolResultText("forgotten"), nil
 }
 
-func (s *MCPServer) handleLink(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *MCPServer) handleLink(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	edge := &storage.Edge{
 		FromID: strArg(req, "from_id"),
 		ToID:   strArg(req, "to_id"),
@@ -205,36 +205,36 @@ func (s *MCPServer) handleLink(_ context.Context, req mcp.CallToolRequest) (*mcp
 		Weight: 1.0,
 	}
 	edge.ID = fmt.Sprintf("%s-%s-%s", utils.ShortID(edge.FromID), utils.ShortID(edge.ToID), edge.Type)
-	if err := s.eng.Graph().AddEdge(edge); err != nil {
+	if err := s.eng.Graph().AddEdge(ctx, edge); err != nil {
 		return nil, err
 	}
 	return jsonResult(edge)
 }
 
-func (s *MCPServer) handleUnlink(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	if err := s.eng.Graph().RemoveEdge(strArg(req, "id")); err != nil {
+func (s *MCPServer) handleUnlink(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if err := s.eng.Graph().RemoveEdge(ctx, strArg(req, "id")); err != nil {
 		return nil, err
 	}
 	return mcp.NewToolResultText("unlinked"), nil
 }
 
-func (s *MCPServer) handleSubgraph(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	sg, err := s.eng.Graph().ExtractSubgraph(strArg(req, "id"), intArgOr(req, "depth", 2))
+func (s *MCPServer) handleSubgraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	sg, err := s.eng.Graph().ExtractSubgraph(ctx, strArg(req, "id"), intArgOr(req, "depth", 2))
 	if err != nil {
 		return nil, err
 	}
 	return jsonResult(sg)
 }
 
-func (s *MCPServer) handleImpact(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	ids, err := s.eng.Graph().Impact(strArg(req, "file"), intArgOr(req, "depth", 3))
+func (s *MCPServer) handleImpact(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ids, err := s.eng.Graph().Impact(ctx, strArg(req, "file"), intArgOr(req, "depth", 3))
 	if err != nil {
 		return nil, err
 	}
 	// Resolve IDs to nodes
 	var nodes []*storage.Node
 	for _, id := range ids {
-		n, err := s.eng.Store().GetNode(id)
+		n, err := s.eng.Store().GetNode(ctx, id)
 		if err == nil {
 			nodes = append(nodes, n)
 		}
@@ -242,42 +242,42 @@ func (s *MCPServer) handleImpact(_ context.Context, req mcp.CallToolRequest) (*m
 	return jsonResult(nodes)
 }
 
-func (s *MCPServer) handleStatus(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	st, err := s.eng.Status(strArg(req, "project"))
+func (s *MCPServer) handleStatus(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	st, err := s.eng.Status(ctx, strArg(req, "project"))
 	if err != nil {
 		return nil, err
 	}
 	return jsonResult(st)
 }
 
-func (s *MCPServer) handleTaskUpdate(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	node, err := s.eng.Store().GetNode(strArg(req, "id"))
+func (s *MCPServer) handleTaskUpdate(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	node, err := s.eng.Store().GetNode(ctx, strArg(req, "id"))
 	if err != nil {
 		return nil, err
 	}
-	_ = s.eng.Store().SaveVersion(node.ID, node.Content, "agent", "task update")
+	_ = s.eng.Store().SaveVersion(ctx, node.ID, node.Content, "agent", "task update")
 	node.Content = strArg(req, "content")
 	node.Version++
-	if err := s.eng.Store().UpdateNode(node); err != nil {
+	if err := s.eng.Store().UpdateNode(ctx, node); err != nil {
 		return nil, err
 	}
 	return jsonResult(node)
 }
 
-func (s *MCPServer) handleSessions(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	sessions, err := s.eng.Store().ListSessions(strArg(req, "project"), intArgOr(req, "limit", 10))
+func (s *MCPServer) handleSessions(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	sessions, err := s.eng.Store().ListSessions(ctx, strArg(req, "project"), intArgOr(req, "limit", 10))
 	if err != nil {
 		return nil, err
 	}
 	return jsonResult(sessions)
 }
 
-func (s *MCPServer) handleStale(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *MCPServer) handleStale(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// Placeholder — full git-aware staleness is Phase 2
 	return mcp.NewToolResultText("staleness detection available in Phase 2"), nil
 }
 
-func (s *MCPServer) handleIntent(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *MCPServer) handleIntent(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	query := strArg(req, "query")
 	i := intentpkg.Classify(query)
 	weights := intentpkg.Weights(i)
@@ -288,8 +288,8 @@ func (s *MCPServer) handleIntent(_ context.Context, req mcp.CallToolRequest) (*m
 	})
 }
 
-func (s *MCPServer) handleProfile(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	p, err := s.eng.Profile(strArg(req, "project"))
+func (s *MCPServer) handleProfile(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	p, err := s.eng.Profile(ctx, strArg(req, "project"))
 	if err != nil {
 		return nil, err
 	}

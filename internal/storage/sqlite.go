@@ -1,7 +1,9 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"time"
 
@@ -52,6 +54,8 @@ type NodeFilter struct {
 // Store
 
 // Store is the SQLite-backed storage layer for Yaad.
+const defaultBusyTimeoutMs = 5000
+
 type Store struct {
 	db *sql.DB
 }
@@ -68,7 +72,7 @@ func NewStore(dbPath string) (*Store, error) {
 		return nil, err
 	}
 	// Set busy timeout so concurrent reads wait instead of failing immediately
-	if _, err := db.Exec("PRAGMA busy_timeout = 5000"); err != nil {
+	if _, err := db.Exec(fmt.Sprintf("PRAGMA busy_timeout = %d", defaultBusyTimeoutMs)); err != nil {
 		return nil, err
 	}
 	s := &Store{db: db}
@@ -81,8 +85,11 @@ func NewStore(dbPath string) (*Store, error) {
 func (s *Store) Close() error { return s.db.Close() }
 
 // SearchNodeByHash finds a node by content hash + scope + project (dedup check).
-func (s *Store) SearchNodeByHash(hash, scope, project string) (*Node, error) {
-	row := s.db.QueryRow(
+func (s *Store) SearchNodeByHash(ctx context.Context, hash, scope, project string) (*Node, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	row := s.db.QueryRowContext(ctx,
 		`SELECT id,type,content,content_hash,summary,scope,project,tier,tags,confidence,
 		access_count,created_at,updated_at,accessed_at,source_session,source_agent,version
 		FROM nodes WHERE content_hash=? AND scope=? AND (project=? OR project IS NULL) LIMIT 1`,
@@ -203,18 +210,24 @@ END;
 
 // --- Nodes ---
 
-func (s *Store) CreateNode(n *Node) error {
-	_, err := s.db.Exec(`INSERT INTO nodes (id, type, content, content_hash, summary, scope, project, tier, tags, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version)
+func (s *Store) CreateNode(ctx context.Context, n *Node) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO nodes (id, type, content, content_hash, summary, scope, project, tier, tags, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		n.ID, n.Type, n.Content, n.ContentHash, n.Summary, n.Scope, n.Project, n.Tier, n.Tags, n.Confidence, n.AccessCount,
 		n.CreatedAt, n.UpdatedAt, nullTime(n.AccessedAt), n.SourceSession, n.SourceAgent, n.Version)
 	return err
 }
 
-func (s *Store) GetNode(id string) (*Node, error) {
+func (s *Store) GetNode(ctx context.Context, id string) (*Node, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	n := &Node{}
 	var accessedAt sql.NullTime
-	err := s.db.QueryRow(`SELECT id, type, content, content_hash, summary, scope, project, tier, tags, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version FROM nodes WHERE id = ?`, id).
+	err := s.db.QueryRowContext(ctx, `SELECT id, type, content, content_hash, summary, scope, project, tier, tags, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version FROM nodes WHERE id = ?`, id).
 		Scan(&n.ID, &n.Type, &n.Content, &n.ContentHash, &n.Summary, &n.Scope, &n.Project, &n.Tier, &n.Tags, &n.Confidence, &n.AccessCount, &n.CreatedAt, &n.UpdatedAt, &accessedAt, &n.SourceSession, &n.SourceAgent, &n.Version)
 	if err != nil {
 		return nil, err
@@ -225,29 +238,38 @@ func (s *Store) GetNode(id string) (*Node, error) {
 	return n, nil
 }
 
-func (s *Store) UpdateNode(n *Node) error {
-	_, err := s.db.Exec(`UPDATE nodes SET type=?, content=?, content_hash=?, summary=?, scope=?, project=?, tier=?, tags=?, confidence=?, access_count=?, updated_at=?, accessed_at=?, source_session=?, source_agent=?, version=? WHERE id=?`,
+func (s *Store) UpdateNode(ctx context.Context, n *Node) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE nodes SET type=?, content=?, content_hash=?, summary=?, scope=?, project=?, tier=?, tags=?, confidence=?, access_count=?, updated_at=?, accessed_at=?, source_session=?, source_agent=?, version=? WHERE id=?`,
 		n.Type, n.Content, n.ContentHash, n.Summary, n.Scope, n.Project, n.Tier, n.Tags, n.Confidence, n.AccessCount,
 		n.UpdatedAt, nullTime(n.AccessedAt), n.SourceSession, n.SourceAgent, n.Version, n.ID)
 	return err
 }
 
-func (s *Store) DeleteNode(id string) error {
-	tx, err := s.db.Begin()
+func (s *Store) DeleteNode(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`DELETE FROM edges WHERE from_id=? OR to_id=?`, id, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM edges WHERE from_id=? OR to_id=?`, id, id); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM nodes WHERE id=?`, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM nodes WHERE id=?`, id); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func (s *Store) ListNodes(f NodeFilter) ([]*Node, error) {
+func (s *Store) ListNodes(ctx context.Context, f NodeFilter) ([]*Node, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	q := "SELECT id, type, content, content_hash, summary, scope, project, tier, tags, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version FROM nodes WHERE 1=1"
 	var args []any
 	if f.Type != "" {
@@ -270,7 +292,7 @@ func (s *Store) ListNodes(f NodeFilter) ([]*Node, error) {
 		q += " AND confidence>=?"
 		args = append(args, f.MinConfidence)
 	}
-	rows, err := s.db.Query(q, args...)
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -278,14 +300,17 @@ func (s *Store) ListNodes(f NodeFilter) ([]*Node, error) {
 	return scanNodes(rows)
 }
 
-func (s *Store) SearchNodes(query string, limit int) ([]*Node, error) {
+func (s *Store) SearchNodes(ctx context.Context, query string, limit int) ([]*Node, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if limit <= 0 {
 		limit = 10
 	}
 	// Convert multi-word query to FTS5 OR query: "auth JWT" → "auth OR JWT"
 	words := strings.Fields(query)
 	ftsQuery := strings.Join(words, " OR ")
-	rows, err := s.db.Query(`SELECT n.id, n.type, n.content, n.content_hash, n.summary, n.scope, n.project, n.tier, n.tags, n.confidence, n.access_count, n.created_at, n.updated_at, n.accessed_at, n.source_session, n.source_agent, n.version
+	rows, err := s.db.QueryContext(ctx, `SELECT n.id, n.type, n.content, n.content_hash, n.summary, n.scope, n.project, n.tier, n.tags, n.confidence, n.access_count, n.created_at, n.updated_at, n.accessed_at, n.source_session, n.source_agent, n.version
 		FROM nodes_fts f JOIN nodes n ON f.rowid = n.rowid WHERE nodes_fts MATCH ? ORDER BY rank LIMIT ?`, ftsQuery, limit)
 	if err != nil {
 		return nil, err
@@ -296,15 +321,21 @@ func (s *Store) SearchNodes(query string, limit int) ([]*Node, error) {
 
 // --- Edges ---
 
-func (s *Store) CreateEdge(e *Edge) error {
-	_, err := s.db.Exec(`INSERT INTO edges (id, from_id, to_id, type, acyclic, weight, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+func (s *Store) CreateEdge(ctx context.Context, e *Edge) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO edges (id, from_id, to_id, type, acyclic, weight, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.ID, e.FromID, e.ToID, e.Type, e.Acyclic, e.Weight, e.Metadata, e.CreatedAt)
 	return err
 }
 
-func (s *Store) GetEdge(id string) (*Edge, error) {
+func (s *Store) GetEdge(ctx context.Context, id string) (*Edge, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	e := &Edge{}
-	err := s.db.QueryRow(`SELECT id, from_id, to_id, type, acyclic, weight, metadata, created_at FROM edges WHERE id=?`, id).
+	err := s.db.QueryRowContext(ctx, `SELECT id, from_id, to_id, type, acyclic, weight, metadata, created_at FROM edges WHERE id=?`, id).
 		Scan(&e.ID, &e.FromID, &e.ToID, &e.Type, &e.Acyclic, &e.Weight, &e.Metadata, &e.CreatedAt)
 	if err != nil {
 		return nil, err
@@ -312,21 +343,33 @@ func (s *Store) GetEdge(id string) (*Edge, error) {
 	return e, nil
 }
 
-func (s *Store) DeleteEdge(id string) error {
-	_, err := s.db.Exec(`DELETE FROM edges WHERE id=?`, id)
+func (s *Store) DeleteEdge(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM edges WHERE id=?`, id)
 	return err
 }
 
-func (s *Store) GetEdgesFrom(nodeID string) ([]*Edge, error) {
-	return s.queryEdges(`SELECT id, from_id, to_id, type, acyclic, weight, metadata, created_at FROM edges WHERE from_id=?`, nodeID)
+func (s *Store) GetEdgesFrom(ctx context.Context, nodeID string) ([]*Edge, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return s.queryEdges(ctx, `SELECT id, from_id, to_id, type, acyclic, weight, metadata, created_at FROM edges WHERE from_id=?`, nodeID)
 }
 
-func (s *Store) GetEdgesTo(nodeID string) ([]*Edge, error) {
-	return s.queryEdges(`SELECT id, from_id, to_id, type, acyclic, weight, metadata, created_at FROM edges WHERE to_id=?`, nodeID)
+func (s *Store) GetEdgesTo(ctx context.Context, nodeID string) ([]*Edge, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return s.queryEdges(ctx, `SELECT id, from_id, to_id, type, acyclic, weight, metadata, created_at FROM edges WHERE to_id=?`, nodeID)
 }
 
-func (s *Store) GetNeighbors(nodeID string) ([]*Node, error) {
-	rows, err := s.db.Query(`SELECT DISTINCT n.id, n.type, n.content, n.content_hash, n.summary, n.scope, n.project, n.tier, n.tags, n.confidence, n.access_count, n.created_at, n.updated_at, n.accessed_at, n.source_session, n.source_agent, n.version
+func (s *Store) GetNeighbors(ctx context.Context, nodeID string) ([]*Node, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT n.id, n.type, n.content, n.content_hash, n.summary, n.scope, n.project, n.tier, n.tags, n.confidence, n.access_count, n.created_at, n.updated_at, n.accessed_at, n.source_session, n.source_agent, n.version
 		FROM nodes n JOIN edges e ON (e.to_id = n.id AND e.from_id = ?) OR (e.from_id = n.id AND e.to_id = ?)`, nodeID, nodeID)
 	if err != nil {
 		return nil, err
@@ -337,18 +380,27 @@ func (s *Store) GetNeighbors(nodeID string) ([]*Node, error) {
 
 // --- Sessions ---
 
-func (s *Store) CreateSession(sess *Session) error {
-	_, err := s.db.Exec(`INSERT INTO sessions (id, project, started_at, ended_at, summary, agent) VALUES (?, ?, ?, ?, ?, ?)`,
+func (s *Store) CreateSession(ctx context.Context, sess *Session) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO sessions (id, project, started_at, ended_at, summary, agent) VALUES (?, ?, ?, ?, ?, ?)`,
 		sess.ID, sess.Project, sess.StartedAt, nullTime(sess.EndedAt), sess.Summary, sess.Agent)
 	return err
 }
 
-func (s *Store) EndSession(id string, summary string) error {
-	_, err := s.db.Exec(`UPDATE sessions SET ended_at=?, summary=? WHERE id=?`, time.Now(), summary, id)
+func (s *Store) EndSession(ctx context.Context, id string, summary string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE sessions SET ended_at=?, summary=? WHERE id=?`, time.Now(), summary, id)
 	return err
 }
 
-func (s *Store) ListSessions(project string, limit int) ([]*Session, error) {
+func (s *Store) ListSessions(ctx context.Context, project string, limit int) ([]*Session, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if limit <= 0 {
 		limit = 10
 	}
@@ -360,7 +412,7 @@ func (s *Store) ListSessions(project string, limit int) ([]*Session, error) {
 	}
 	q += " ORDER BY started_at DESC LIMIT ?"
 	args = append(args, limit)
-	rows, err := s.db.Query(q, args...)
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -382,13 +434,19 @@ func (s *Store) ListSessions(project string, limit int) ([]*Session, error) {
 
 // --- File Watch ---
 
-func (s *Store) AddFileWatch(filePath, nodeID, gitHash string) error {
-	_, err := s.db.Exec(`INSERT INTO file_watch (file_path, node_id, git_hash) VALUES (?, ?, ?)`, filePath, nodeID, gitHash)
+func (s *Store) AddFileWatch(ctx context.Context, filePath, nodeID, gitHash string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO file_watch (file_path, node_id, git_hash) VALUES (?, ?, ?)`, filePath, nodeID, gitHash)
 	return err
 }
 
-func (s *Store) GetNodesByFile(filePath string) ([]*Node, error) {
-	rows, err := s.db.Query(`SELECT n.id, n.type, n.content, n.content_hash, n.summary, n.scope, n.project, n.tier, n.tags, n.confidence, n.access_count, n.created_at, n.updated_at, n.accessed_at, n.source_session, n.source_agent, n.version
+func (s *Store) GetNodesByFile(ctx context.Context, filePath string) ([]*Node, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT n.id, n.type, n.content, n.content_hash, n.summary, n.scope, n.project, n.tier, n.tags, n.confidence, n.access_count, n.created_at, n.updated_at, n.accessed_at, n.source_session, n.source_agent, n.version
 		FROM nodes n JOIN file_watch fw ON fw.node_id = n.id WHERE fw.file_path = ?`, filePath)
 	if err != nil {
 		return nil, err
@@ -399,19 +457,25 @@ func (s *Store) GetNodesByFile(filePath string) ([]*Node, error) {
 
 // --- Versions ---
 
-func (s *Store) SaveVersion(nodeID string, content, changedBy, reason string) error {
+func (s *Store) SaveVersion(ctx context.Context, nodeID string, content, changedBy, reason string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	var maxVer int
-	err := s.db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM node_versions WHERE node_id=?`, nodeID).Scan(&maxVer)
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM node_versions WHERE node_id=?`, nodeID).Scan(&maxVer)
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(`INSERT INTO node_versions (node_id, version, content, changed_at, changed_by, reason) VALUES (?, ?, ?, ?, ?, ?)`,
+	_, err = s.db.ExecContext(ctx, `INSERT INTO node_versions (node_id, version, content, changed_at, changed_by, reason) VALUES (?, ?, ?, ?, ?, ?)`,
 		nodeID, maxVer+1, content, time.Now(), changedBy, reason)
 	return err
 }
 
-func (s *Store) GetVersions(nodeID string) ([]*NodeVersion, error) {
-	rows, err := s.db.Query(`SELECT node_id, version, content, changed_at, changed_by, reason FROM node_versions WHERE node_id=? ORDER BY version`, nodeID)
+func (s *Store) GetVersions(ctx context.Context, nodeID string) ([]*NodeVersion, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT node_id, version, content, changed_at, changed_by, reason FROM node_versions WHERE node_id=? ORDER BY version`, nodeID)
 	if err != nil {
 		return nil, err
 	}
@@ -452,8 +516,8 @@ func scanNodes(rows *sql.Rows) ([]*Node, error) {
 	return out, rows.Err()
 }
 
-func (s *Store) queryEdges(query string, args ...any) ([]*Edge, error) {
-	rows, err := s.db.Query(query, args...)
+func (s *Store) queryEdges(ctx context.Context, query string, args ...any) ([]*Edge, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -468,3 +532,173 @@ func (s *Store) queryEdges(query string, args ...any) ([]*Edge, error) {
 	}
 	return out, rows.Err()
 }
+
+// GetNodesBatch fetches multiple nodes by ID in a single query.
+func (s *Store) GetNodesBatch(ctx context.Context, ids []string) ([]*Node, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	q := fmt.Sprintf(`SELECT id, type, content, content_hash, summary, scope, project, tier, tags, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version FROM nodes WHERE id IN (%s)`, strings.Join(placeholders, ","))
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanNodes(rows)
+}
+
+// CountEdges returns inbound and outbound edge counts for a node.
+func (s *Store) CountEdges(ctx context.Context, nodeID string) (inbound int, outbound int, err error) {
+	if err := ctx.Err(); err != nil {
+		return 0, 0, err
+	}
+	err = s.db.QueryRowContext(ctx,
+		`SELECT (SELECT COUNT(*) FROM edges WHERE to_id = ?), (SELECT COUNT(*) FROM edges WHERE from_id = ?)`,
+		nodeID, nodeID).Scan(&inbound, &outbound)
+	return inbound, outbound, err
+}
+
+// CountAllEdges returns the total number of edges in the graph.
+func (s *Store) CountAllEdges(ctx context.Context) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM edges`).Scan(&count)
+	return count, err
+}
+
+// CheckCycle uses a recursive CTE to detect if adding from→to would create a cycle
+// among acyclic edges.
+func (s *Store) CheckCycle(ctx context.Context, fromID, toID string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	query := `
+		WITH RECURSIVE ancestors(id) AS (
+			SELECT ?
+			UNION ALL
+			SELECT e.from_id FROM ancestors a
+			JOIN edges e ON e.to_id = a.id AND e.acyclic = 1
+		)
+		SELECT 1 FROM ancestors WHERE id = ? LIMIT 1`
+	var exists int
+	err := s.db.QueryRowContext(ctx, query, fromID, toID).Scan(&exists)
+	if err == nil {
+		return true, nil
+	}
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return false, err
+}
+
+// WithTx runs the given function inside a SQL transaction.
+// If the function returns an error, the transaction is rolled back.
+func (s *Store) WithTx(ctx context.Context, fn func(Storage) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	txStore := &txStore{tx: tx}
+	if err := fn(txStore); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// txStore is a Storage implementation backed by a SQL transaction.
+type txStore struct {
+	tx *sql.Tx
+}
+
+func (t *txStore) queryNodes(ctx context.Context, query string, args ...any) ([]*Node, error) {
+	rows, err := t.tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanNodes(rows)
+}
+
+func (t *txStore) CreateNode(ctx context.Context, n *Node) error {
+	_, err := t.tx.ExecContext(ctx, `INSERT INTO nodes (id, type, content, content_hash, summary, scope, project, tier, tags, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		n.ID, n.Type, n.Content, n.ContentHash, n.Summary, n.Scope, n.Project, n.Tier, n.Tags, n.Confidence, n.AccessCount,
+		n.CreatedAt, n.UpdatedAt, nullTime(n.AccessedAt), n.SourceSession, n.SourceAgent, n.Version)
+	return err
+}
+
+func (t *txStore) GetNode(ctx context.Context, id string) (*Node, error) {
+	n := &Node{}
+	var accessedAt sql.NullTime
+	err := t.tx.QueryRowContext(ctx, `SELECT id, type, content, content_hash, summary, scope, project, tier, tags, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version FROM nodes WHERE id = ?`, id).
+		Scan(&n.ID, &n.Type, &n.Content, &n.ContentHash, &n.Summary, &n.Scope, &n.Project, &n.Tier, &n.Tags, &n.Confidence, &n.AccessCount, &n.CreatedAt, &n.UpdatedAt, &accessedAt, &n.SourceSession, &n.SourceAgent, &n.Version)
+	if err != nil {
+		return nil, err
+	}
+	if accessedAt.Valid {
+		n.AccessedAt = accessedAt.Time
+	}
+	return n, nil
+}
+
+func (t *txStore) GetNodesBatch(ctx context.Context, ids []string) ([]*Node, error) { return nil, nil }
+func (t *txStore) UpdateNode(ctx context.Context, n *Node) error {
+	_, err := t.tx.ExecContext(ctx, `UPDATE nodes SET type=?, content=?, content_hash=?, summary=?, scope=?, project=?, tier=?, tags=?, confidence=?, access_count=?, updated_at=?, accessed_at=?, source_session=?, source_agent=?, version=? WHERE id=?`,
+		n.Type, n.Content, n.ContentHash, n.Summary, n.Scope, n.Project, n.Tier, n.Tags, n.Confidence, n.AccessCount,
+		n.UpdatedAt, nullTime(n.AccessedAt), n.SourceSession, n.SourceAgent, n.Version, n.ID)
+	return err
+}
+func (t *txStore) DeleteNode(ctx context.Context, id string) error {
+	_, err := t.tx.ExecContext(ctx, `DELETE FROM edges WHERE from_id=? OR to_id=?`, id, id)
+	if err != nil {
+		return err
+	}
+	_, err = t.tx.ExecContext(ctx, `DELETE FROM nodes WHERE id=?`, id)
+	return err
+}
+func (t *txStore) ListNodes(ctx context.Context, f NodeFilter) ([]*Node, error) { return nil, nil }
+func (t *txStore) SearchNodes(ctx context.Context, query string, limit int) ([]*Node, error) { return nil, nil }
+func (t *txStore) SearchNodeByHash(ctx context.Context, hash, scope, project string) (*Node, error) { return nil, nil }
+func (t *txStore) GetNeighbors(ctx context.Context, nodeID string) ([]*Node, error) { return nil, nil }
+func (t *txStore) CreateEdge(ctx context.Context, e *Edge) error {
+	_, err := t.tx.ExecContext(ctx, `INSERT INTO edges (id, from_id, to_id, type, acyclic, weight, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		e.ID, e.FromID, e.ToID, e.Type, e.Acyclic, e.Weight, e.Metadata, e.CreatedAt)
+	return err
+}
+func (t *txStore) GetEdge(ctx context.Context, id string) (*Edge, error) { return nil, nil }
+func (t *txStore) DeleteEdge(ctx context.Context, id string) error {
+	_, err := t.tx.ExecContext(ctx, `DELETE FROM edges WHERE id=?`, id)
+	return err
+}
+func (t *txStore) GetEdgesFrom(ctx context.Context, nodeID string) ([]*Edge, error) { return nil, nil }
+func (t *txStore) GetEdgesTo(ctx context.Context, nodeID string) ([]*Edge, error) { return nil, nil }
+func (t *txStore) CountEdges(ctx context.Context, nodeID string) (int, int, error) { return 0, 0, nil }
+func (t *txStore) CountAllEdges(ctx context.Context) (int, error) { return 0, nil }
+func (t *txStore) CheckCycle(ctx context.Context, fromID, toID string) (bool, error) { return false, nil }
+func (t *txStore) CreateSession(ctx context.Context, sess *Session) error { return nil }
+func (t *txStore) EndSession(ctx context.Context, id string, summary string) error { return nil }
+func (t *txStore) ListSessions(ctx context.Context, project string, limit int) ([]*Session, error) { return nil, nil }
+func (t *txStore) SaveVersion(ctx context.Context, nodeID string, content, changedBy, reason string) error { return nil }
+func (t *txStore) GetVersions(ctx context.Context, nodeID string) ([]*NodeVersion, error) { return nil, nil }
+func (t *txStore) SaveEmbedding(ctx context.Context, nodeID, model string, vector []float32) error { return nil }
+func (t *txStore) DeleteEmbedding(ctx context.Context, nodeID string) error { return nil }
+func (t *txStore) AllEmbeddings(ctx context.Context) (map[string][]float32, error) { return nil, nil }
+func (t *txStore) GetEmbeddingsBatch(ctx context.Context, offset, limit int) (map[string][]float32, error) { return nil, nil }
+func (t *txStore) AddFileWatch(ctx context.Context, filePath, nodeID, gitHash string) error { return nil }
+func (t *txStore) AddReplayEvent(ctx context.Context, sessionID, data string) error { return nil }
+func (t *txStore) GetReplayEvents(ctx context.Context, sessionID string) ([]*ReplayEvent, error) { return nil, nil }
+func (t *txStore) WithTx(ctx context.Context, fn func(Storage) error) error { return fn(t) }
+func (t *txStore) Close() error { return nil }

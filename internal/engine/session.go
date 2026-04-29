@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -10,9 +11,12 @@ import (
 )
 
 // CompressSession creates a session summary node linking all memories from the session.
-func (e *Engine) CompressSession(sessionID, project string) (*storage.Node, error) {
+func (e *Engine) CompressSession(ctx context.Context, sessionID, project string) (*storage.Node, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// Get all nodes created in this session
-	nodes, err := e.store.ListNodes(storage.NodeFilter{Project: project})
+	nodes, err := e.store.ListNodes(ctx, storage.NodeFilter{Project: project})
 	if err != nil {
 		return nil, err
 	}
@@ -44,13 +48,13 @@ func (e *Engine) CompressSession(sessionID, project string) (*storage.Node, erro
 		SourceSession: sessionID,
 		Version:       1,
 	}
-	if err := e.graph.AddNode(sessNode); err != nil {
+	if err := e.graph.AddNode(ctx, sessNode); err != nil {
 		return nil, err
 	}
 
 	// Link all session nodes to the session summary
 	for _, n := range sessionNodes {
-		_ = e.graph.AddEdge(&storage.Edge{
+		_ = e.graph.AddEdge(ctx, &storage.Edge{
 			ID:     uuid.New().String(),
 			FromID: n.ID,
 			ToID:   sessNode.ID,
@@ -60,7 +64,7 @@ func (e *Engine) CompressSession(sessionID, project string) (*storage.Node, erro
 	}
 
 	// End the session in the sessions table
-	_ = e.store.EndSession(sessionID, summary)
+	_ = e.store.EndSession(ctx, sessionID, summary)
 
 	return sessNode, nil
 }
@@ -92,7 +96,10 @@ func truncateStr(s string, n int) string {
 }
 
 // StartSession creates a new session record and returns its ID.
-func (e *Engine) StartSession(project, agent string) (string, error) {
+func (e *Engine) StartSession(ctx context.Context, project, agent string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	id := uuid.New().String()
 	sess := &storage.Session{
 		ID:        id,
@@ -100,5 +107,5 @@ func (e *Engine) StartSession(project, agent string) (string, error) {
 		Agent:     agent,
 		StartedAt: time.Now(),
 	}
-	return id, e.store.CreateSession(sess)
+	return id, e.store.CreateSession(ctx, sess)
 }

@@ -9,6 +9,7 @@
 package temporal
 
 import (
+	"context"
 	"sync"
 
 	"github.com/google/uuid"
@@ -29,7 +30,10 @@ func New(store storage.Storage) *Backbone {
 // Link adds a node to the temporal backbone.
 // Creates an immutable "next" edge from the previous node to this one.
 // This edge is never modified or deleted — it's the ground truth timeline.
-func (b *Backbone) Link(nodeID, project string) error {
+func (b *Backbone) Link(ctx context.Context, nodeID, project string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	b.mu.Lock()
 	prevID := b.lastNode[project]
 	b.lastNode[project] = nodeID
@@ -39,7 +43,7 @@ func (b *Backbone) Link(nodeID, project string) error {
 		return nil
 	}
 
-	return b.store.CreateEdge(&storage.Edge{
+	return b.store.CreateEdge(ctx, &storage.Edge{
 		ID:      uuid.New().String(),
 		FromID:  prevID,
 		ToID:    nodeID,
@@ -51,7 +55,7 @@ func (b *Backbone) Link(nodeID, project string) error {
 
 // Timeline returns nodes in chronological order for a project,
 // walking the temporal backbone from the given start node.
-func (b *Backbone) Timeline(startID string, direction string, limit int) ([]*storage.Node, error) {
+func (b *Backbone) Timeline(ctx context.Context, startID string, direction string, limit int) ([]*storage.Node, error) {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -60,7 +64,7 @@ func (b *Backbone) Timeline(startID string, direction string, limit int) ([]*sto
 	currentID := startID
 
 	for i := 0; i < limit; i++ {
-		node, err := b.store.GetNode(currentID)
+		node, err := b.store.GetNode(ctx, currentID)
 		if err != nil {
 			break
 		}
@@ -69,9 +73,9 @@ func (b *Backbone) Timeline(startID string, direction string, limit int) ([]*sto
 		// Walk forward or backward
 		var edges []*storage.Edge
 		if direction == "forward" {
-			edges, _ = b.store.GetEdgesFrom(currentID)
+			edges, _ = b.store.GetEdgesFrom(ctx, currentID)
 		} else {
-			edges, _ = b.store.GetEdgesTo(currentID)
+			edges, _ = b.store.GetEdgesTo(ctx, currentID)
 		}
 
 		found := false

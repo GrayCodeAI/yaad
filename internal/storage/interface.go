@@ -1,50 +1,60 @@
 package storage
 
-import "database/sql"
+import (
+	"context"
+)
 
 // Storage is the persistence interface used by Engine and other packages.
+// All graph-aware queries (recursive CTEs, cycle detection) are encapsulated
+// behind methods so callers never need raw *sql.DB access.
 type Storage interface {
 	// Nodes
-	CreateNode(n *Node) error
-	GetNode(id string) (*Node, error)
-	UpdateNode(n *Node) error
-	DeleteNode(id string) error
-	ListNodes(f NodeFilter) ([]*Node, error)
-	SearchNodes(query string, limit int) ([]*Node, error)
-	SearchNodeByHash(hash, scope, project string) (*Node, error)
-	GetNeighbors(nodeID string) ([]*Node, error)
+	CreateNode(ctx context.Context, n *Node) error
+	GetNode(ctx context.Context, id string) (*Node, error)
+	GetNodesBatch(ctx context.Context, ids []string) ([]*Node, error)
+	UpdateNode(ctx context.Context, n *Node) error
+	DeleteNode(ctx context.Context, id string) error
+	ListNodes(ctx context.Context, f NodeFilter) ([]*Node, error)
+	SearchNodes(ctx context.Context, query string, limit int) ([]*Node, error)
+	SearchNodeByHash(ctx context.Context, hash, scope, project string) (*Node, error)
+	GetNeighbors(ctx context.Context, nodeID string) ([]*Node, error)
 
 	// Edges
-	CreateEdge(e *Edge) error
-	GetEdge(id string) (*Edge, error)
-	DeleteEdge(id string) error
-	GetEdgesFrom(nodeID string) ([]*Edge, error)
-	GetEdgesTo(nodeID string) ([]*Edge, error)
+	CreateEdge(ctx context.Context, e *Edge) error
+	GetEdge(ctx context.Context, id string) (*Edge, error)
+	DeleteEdge(ctx context.Context, id string) error
+	GetEdgesFrom(ctx context.Context, nodeID string) ([]*Edge, error)
+	GetEdgesTo(ctx context.Context, nodeID string) ([]*Edge, error)
+	CountEdges(ctx context.Context, nodeID string) (inbound int, outbound int, err error)
+	CountAllEdges(ctx context.Context) (int, error)
+
+	// Graph queries (encapsulates recursive CTEs)
+	CheckCycle(ctx context.Context, fromID, toID string) (bool, error)
 
 	// Sessions
-	CreateSession(sess *Session) error
-	EndSession(id string, summary string) error
-	ListSessions(project string, limit int) ([]*Session, error)
+	CreateSession(ctx context.Context, sess *Session) error
+	EndSession(ctx context.Context, id string, summary string) error
+	ListSessions(ctx context.Context, project string, limit int) ([]*Session, error)
 
 	// Versions
-	SaveVersion(nodeID string, content, changedBy, reason string) error
-	GetVersions(nodeID string) ([]*NodeVersion, error)
+	SaveVersion(ctx context.Context, nodeID string, content, changedBy, reason string) error
+	GetVersions(ctx context.Context, nodeID string) ([]*NodeVersion, error)
 
 	// Embeddings
-	SaveEmbedding(nodeID, model string, vector []float32) error
-	DeleteEmbedding(nodeID string) error
-	AllEmbeddings() (map[string][]float32, error)
-	GetEmbeddingsBatch(offset, limit int) (map[string][]float32, error)
+	SaveEmbedding(ctx context.Context, nodeID, model string, vector []float32) error
+	DeleteEmbedding(ctx context.Context, nodeID string) error
+	AllEmbeddings(ctx context.Context) (map[string][]float32, error)
+	GetEmbeddingsBatch(ctx context.Context, offset, limit int) (map[string][]float32, error)
 
 	// Replay
-	AddReplayEvent(sessionID, data string) error
-	GetReplayEvents(sessionID string) ([]*ReplayEvent, error)
+	AddReplayEvent(ctx context.Context, sessionID, data string) error
+	GetReplayEvents(ctx context.Context, sessionID string) ([]*ReplayEvent, error)
 
 	// File watch (staleness tracking)
-	AddFileWatch(filePath, nodeID, gitHash string) error
+	AddFileWatch(ctx context.Context, filePath, nodeID, gitHash string) error
 
-	// Raw DB access (for packages that need recursive CTEs)
-	DB() *sql.DB
+	// Transactions
+	WithTx(ctx context.Context, fn func(Storage) error) error
 
 	Close() error
 }

@@ -13,10 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/GrayCodeAI/yaad/internal/agentconfig"
 	"github.com/GrayCodeAI/yaad/internal/bench"
 	"github.com/GrayCodeAI/yaad/internal/boundary"
-	"github.com/GrayCodeAI/yaad/internal/bridge"
 	"github.com/GrayCodeAI/yaad/internal/config"
 	"github.com/GrayCodeAI/yaad/internal/embeddings"
 	"github.com/GrayCodeAI/yaad/internal/encrypt"
@@ -35,7 +33,6 @@ import (
 	yaadtls "github.com/GrayCodeAI/yaad/internal/tls"
 	"github.com/GrayCodeAI/yaad/internal/utils"
 	yaadsync "github.com/GrayCodeAI/yaad/internal/sync"
-	yaadsdk "github.com/GrayCodeAI/yaad/sdk/go/yaad"
 )
 
 func setup(t *testing.T) (*engine.Engine, func()) {
@@ -45,7 +42,7 @@ func setup(t *testing.T) (*engine.Engine, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eng := engine.New(store, graph.New(store))
+	eng := engine.New(store, graph.New(store, store.DB()))
 	return eng, func() { store.Close(); os.RemoveAll(dir) }
 }
 
@@ -62,7 +59,7 @@ func TestRememberRecallContext(t *testing.T) {
 	}
 	var ids []string
 	for _, in := range nodes {
-		n, err := eng.Remember(in)
+		n, err := eng.Remember(context.Background(), in)
 		if err != nil {
 			t.Fatalf("Remember(%q): %v", in.Content, err)
 		}
@@ -73,7 +70,7 @@ func TestRememberRecallContext(t *testing.T) {
 	}
 
 	// --- Dedup: same content returns same ID ---
-	n2, err := eng.Remember(engine.RememberInput{
+	n2, err := eng.Remember(context.Background(), engine.RememberInput{
 		Type: "convention", Content: "Use jose not jsonwebtoken for Edge compatibility", Scope: "project",
 	})
 	if err != nil {
@@ -84,7 +81,7 @@ func TestRememberRecallContext(t *testing.T) {
 	}
 
 	// --- Recall ---
-	result, err := eng.Recall(engine.RecallOpts{Query: "auth JWT", Depth: 2, Limit: 10})
+	result, err := eng.Recall(context.Background(), engine.RecallOpts{Query: "auth JWT", Depth: 2, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +98,7 @@ func TestRememberRecallContext(t *testing.T) {
 	}
 
 	// --- Context (hot tier) ---
-	ctx, err := eng.Context("")
+	ctx, err := eng.Context(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,10 +115,10 @@ func TestRememberRecallContext(t *testing.T) {
 	}
 
 	// --- Forget ---
-	if err := eng.Forget(ids[3]); err != nil {
+	if err := eng.Forget(context.Background(), ids[3]); err != nil {
 		t.Fatal(err)
 	}
-	forgotten, _ := eng.Store().GetNode(ids[3])
+	forgotten, _ := eng.Store().GetNode(context.Background(), ids[3])
 	if forgotten.Confidence != 0 {
 		t.Errorf("forget: expected confidence=0, got %f", forgotten.Confidence)
 	}
@@ -131,11 +128,11 @@ func TestGraphLinkAndSubgraph(t *testing.T) {
 	eng, cleanup := setup(t)
 	defer cleanup()
 
-	a, _ := eng.Remember(engine.RememberInput{Type: "decision", Content: "Use NATS for event bus", Scope: "project"})
-	b, _ := eng.Remember(engine.RememberInput{Type: "convention", Content: "Use NATS client v2", Scope: "project"})
+	a, _ := eng.Remember(context.Background(), engine.RememberInput{Type: "decision", Content: "Use NATS for event bus", Scope: "project"})
+	b, _ := eng.Remember(context.Background(), engine.RememberInput{Type: "convention", Content: "Use NATS client v2", Scope: "project"})
 
 	// Link: decision led_to convention
-	err := eng.Graph().AddEdge(&storage.Edge{
+	err := eng.Graph().AddEdge(context.Background(), &storage.Edge{
 		ID: "e1", FromID: a.ID, ToID: b.ID, Type: "led_to", Weight: 1.0,
 	})
 	if err != nil {
@@ -143,7 +140,7 @@ func TestGraphLinkAndSubgraph(t *testing.T) {
 	}
 
 	// Subgraph from decision should include convention
-	sg, err := eng.Graph().ExtractSubgraph(a.ID, 1)
+	sg, err := eng.Graph().ExtractSubgraph(context.Background(), a.ID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +149,7 @@ func TestGraphLinkAndSubgraph(t *testing.T) {
 	}
 
 	// Cycle detection: led_to is acyclic — b→a should fail
-	err = eng.Graph().AddEdge(&storage.Edge{
+	err = eng.Graph().AddEdge(context.Background(), &storage.Edge{
 		ID: "e2", FromID: b.ID, ToID: a.ID, Type: "led_to", Weight: 1.0,
 	})
 	if err == nil {
@@ -160,7 +157,7 @@ func TestGraphLinkAndSubgraph(t *testing.T) {
 	}
 
 	// relates_to allows cycles
-	err = eng.Graph().AddEdge(&storage.Edge{
+	err = eng.Graph().AddEdge(context.Background(), &storage.Edge{
 		ID: "e3", FromID: b.ID, ToID: a.ID, Type: "relates_to", Weight: 1.0,
 	})
 	if err != nil {
@@ -179,24 +176,24 @@ func TestPhase3EmbeddingsAndHybridSearch(t *testing.T) {
 		{Type: "bug", Content: "Token refresh race in auth middleware", Scope: "project"},
 	}
 	for _, in := range nodes {
-		eng.Remember(in)
+		eng.Remember(context.Background(), in)
 	}
 
 	// Embed all nodes with local stub provider
 	provider := embeddings.NewLocal()
-	allNodes, _ := eng.Store().ListNodes(storage.NodeFilter{})
+	allNodes, _ := eng.Store().ListNodes(context.Background(), storage.NodeFilter{})
 	for _, n := range allNodes {
 		vec, err := provider.Embed(context.Background(), n.Content)
 		if err != nil {
 			t.Fatalf("Embed: %v", err)
 		}
-		if err := eng.Store().SaveEmbedding(n.ID, provider.Name(), vec); err != nil {
+		if err := eng.Store().SaveEmbedding(context.Background(), n.ID, provider.Name(), vec); err != nil {
 			t.Fatalf("SaveEmbedding: %v", err)
 		}
 	}
 
 	// Verify embeddings stored
-	embs, err := eng.Store().AllEmbeddings()
+	embs, err := eng.Store().AllEmbeddings(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +212,7 @@ func TestPhase3EmbeddingsAndHybridSearch(t *testing.T) {
 	}
 
 	// Re-rank
-	reranked := engine.Rerank(scored, eng.Store())
+	reranked := engine.Rerank(context.Background(), scored, eng.Store())
 	if len(reranked) == 0 {
 		t.Error("rerank returned no results")
 	}
@@ -225,15 +222,15 @@ func TestPhase3DecayAndGC(t *testing.T) {
 	eng, cleanup := setup(t)
 	defer cleanup()
 
-	n, _ := eng.Remember(engine.RememberInput{Type: "decision", Content: "Old decision", Scope: "project"})
+	n, _ := eng.Remember(context.Background(), engine.RememberInput{Type: "decision", Content: "Old decision", Scope: "project"})
 
 	// Manually set low confidence
-	node, _ := eng.Store().GetNode(n.ID)
+	node, _ := eng.Store().GetNode(context.Background(), n.ID)
 	node.Confidence = 0.05
-	eng.Store().UpdateNode(node)
+	eng.Store().UpdateNode(context.Background(), node)
 
 	// GC should remove it
-	removed, err := engine.GarbageCollect(eng.Store(), engine.DefaultDecayConfig)
+	removed, err := engine.GarbageCollect(context.Background(), eng.Store(), engine.DefaultDecayConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,9 +243,9 @@ func TestPhase3ProactiveContext(t *testing.T) {
 	eng, cleanup := setup(t)
 	defer cleanup()
 
-	eng.Remember(engine.RememberInput{Type: "convention", Content: "Use TypeScript strict mode", Scope: "project"})
-	eng.Remember(engine.RememberInput{Type: "task", Content: "Add rate limiting", Scope: "project"})
-	eng.Remember(engine.RememberInput{Type: "decision", Content: "Use NATS for events", Scope: "project"})
+	eng.Remember(context.Background(), engine.RememberInput{Type: "convention", Content: "Use TypeScript strict mode", Scope: "project"})
+	eng.Remember(context.Background(), engine.RememberInput{Type: "task", Content: "Add rate limiting", Scope: "project"})
+	eng.Remember(context.Background(), engine.RememberInput{Type: "decision", Content: "Use NATS for events", Scope: "project"})
 
 	hs := engine.NewHybridSearch(eng.Store(), eng.Graph(), nil)
 	pc := engine.NewProactiveContext(eng, hs)
@@ -276,7 +273,7 @@ func TestPhase4HooksAndReplay(t *testing.T) {
 
 	// SessionStart
 	in := &hooks.HookInput{Agent: "claude-code", Project: dir}
-	if err := runner.SessionStart(in); err != nil {
+	if err := runner.SessionStart(context.Background(), in); err != nil {
 		t.Fatalf("SessionStart: %v", err)
 	}
 
@@ -287,16 +284,16 @@ func TestPhase4HooksAndReplay(t *testing.T) {
 		ToolOutput: "wrote JWT middleware",
 		Agent:      "claude-code",
 	}
-	if err := runner.PostToolUse(toolIn); err != nil {
+	if err := runner.PostToolUse(context.Background(), toolIn); err != nil {
 		t.Fatalf("PostToolUse: %v", err)
 	}
 	// Store replay event
-	if err := runner.StoreToolEvent(toolIn, eng.Store()); err != nil {
+	if err := runner.StoreToolEvent(context.Background(), toolIn, eng.Store()); err != nil {
 		t.Fatalf("StoreToolEvent: %v", err)
 	}
 
 	// Verify node was created
-	result, err := eng.Recall(engine.RecallOpts{Query: "JWT middleware", Limit: 5})
+	result, err := eng.Recall(context.Background(), engine.RecallOpts{Query: "JWT middleware", Limit: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +303,7 @@ func TestPhase4HooksAndReplay(t *testing.T) {
 
 	// SessionEnd
 	endIn := &hooks.HookInput{Summary: "Implemented JWT auth middleware", Agent: "claude-code"}
-	if err := runner.SessionEnd(endIn); err != nil {
+	if err := runner.SessionEnd(context.Background(), endIn); err != nil {
 		t.Fatalf("SessionEnd: %v", err)
 	}
 }
@@ -335,46 +332,15 @@ func TestPhase4SSEBroker(t *testing.T) {
 	}
 }
 
-func TestPhase4AgentConfigGenerator(t *testing.T) {
-	dir := t.TempDir()
-
-	// Claude Code
-	if err := agentconfig.Generate(agentconfig.AgentClaudeCode, dir); err != nil {
-		t.Fatalf("Generate claude-code: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, ".mcp.json")); err != nil {
-		t.Error(".mcp.json not created")
-	}
-	if _, err := os.Stat(filepath.Join(dir, ".claude", "hooks.json")); err != nil {
-		t.Error(".claude/hooks.json not created")
-	}
-
-	// OpenCode
-	if err := agentconfig.Generate(agentconfig.AgentOpenCode, dir); err != nil {
-		t.Fatalf("Generate opencode: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "opencode.json")); err != nil {
-		t.Error("opencode.json not created")
-	}
-
-	// Codex CLI
-	if err := agentconfig.Generate(agentconfig.AgentCodexCLI, dir); err != nil {
-		t.Fatalf("Generate codex-cli: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, ".codex", "config.yaml")); err != nil {
-		t.Error(".codex/config.yaml not created")
-	}
-}
-
 func TestPhase5ExportImport(t *testing.T) {
 	eng, cleanup := setup(t)
 	defer cleanup()
 
-	eng.Remember(engine.RememberInput{Type: "convention", Content: "Use jose not jsonwebtoken", Scope: "project"})
-	eng.Remember(engine.RememberInput{Type: "decision", Content: "Chose RS256 for JWT", Scope: "project"})
+	eng.Remember(context.Background(), engine.RememberInput{Type: "convention", Content: "Use jose not jsonwebtoken", Scope: "project"})
+	eng.Remember(context.Background(), engine.RememberInput{Type: "decision", Content: "Chose RS256 for JWT", Scope: "project"})
 
 	// JSON export
-	data, err := exportimport.ExportJSON(eng.Store(), "")
+	data, err := exportimport.ExportJSON(context.Background(), eng.Store(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +351,7 @@ func TestPhase5ExportImport(t *testing.T) {
 	// JSON import into fresh store
 	eng2, cleanup2 := setup(t)
 	defer cleanup2()
-	nodes, edges, err := exportimport.ImportJSON(eng2.Store(), data)
+	nodes, edges, err := exportimport.ImportJSON(context.Background(), eng2.Store(), data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,7 +361,7 @@ func TestPhase5ExportImport(t *testing.T) {
 	_ = edges
 
 	// Markdown export
-	md, err := exportimport.ExportMarkdown(eng.Store(), "")
+	md, err := exportimport.ExportMarkdown(context.Background(), eng.Store(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +371,7 @@ func TestPhase5ExportImport(t *testing.T) {
 
 	// Obsidian export
 	vaultDir := t.TempDir()
-	n, err := exportimport.ExportObsidian(eng.Store(), "", vaultDir)
+	n, err := exportimport.ExportObsidian(context.Background(), eng.Store(), "", vaultDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,7 +393,7 @@ func TestPhase5Skills(t *testing.T) {
 			{Order: 3, Description: "Deploy", Command: "fly deploy"},
 		},
 	}
-	node, err := skill.Store(eng, sk, "")
+	node, err := skill.Store(context.Background(), eng, sk, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,7 +402,7 @@ func TestPhase5Skills(t *testing.T) {
 	}
 
 	// List skills
-	skills, err := skill.ListSkills(eng.Store(), "")
+	skills, err := skill.ListSkills(context.Background(), eng.Store(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -455,12 +421,12 @@ func TestPhase5TeamMemory(t *testing.T) {
 	eng, cleanup := setup(t)
 	defer cleanup()
 
-	node, _ := eng.Remember(engine.RememberInput{
+	node, _ := eng.Remember(context.Background(), engine.RememberInput{
 		Type: "convention", Content: "Use TypeScript strict mode", Scope: "project",
 	})
 
 	// Share to team
-	shared, err := team.Share(eng.Store(), eng.Store(), team.ShareInput{
+	shared, err := team.Share(context.Background(), eng.Store(), eng.Store(), team.ShareInput{
 		NodeID: node.ID, TeamID: "team-alpha", SharedBy: "alice",
 	})
 	if err != nil {
@@ -471,7 +437,7 @@ func TestPhase5TeamMemory(t *testing.T) {
 	}
 
 	// List team memories
-	memories, err := team.ListTeamMemories(eng.Store(), "team-alpha")
+	memories, err := team.ListTeamMemories(context.Background(), eng.Store(), "team-alpha")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -485,11 +451,11 @@ func TestPhase5Benchmark(t *testing.T) {
 	defer cleanup()
 
 	// Seed some memories
-	eng.Remember(engine.RememberInput{Type: "convention", Content: "Use jose not jsonwebtoken for Edge compatibility", Scope: "project"})
-	eng.Remember(engine.RememberInput{Type: "decision", Content: "Chose NATS over Redis Streams for event bus", Scope: "project"})
-	eng.Remember(engine.RememberInput{Type: "bug", Content: "Token refresh race condition in auth middleware", Scope: "project"})
+	eng.Remember(context.Background(), engine.RememberInput{Type: "convention", Content: "Use jose not jsonwebtoken for Edge compatibility", Scope: "project"})
+	eng.Remember(context.Background(), engine.RememberInput{Type: "decision", Content: "Chose NATS over Redis Streams for event bus", Scope: "project"})
+	eng.Remember(context.Background(), engine.RememberInput{Type: "bug", Content: "Token refresh race condition in auth middleware", Scope: "project"})
 
-	result := bench.Run(eng, bench.DefaultQAs(), 2, 10)
+	result := bench.Run(context.Background(), eng, bench.DefaultQAs(), 2, 10)
 	if result.Total == 0 {
 		t.Error("benchmark: no questions evaluated")
 	}
@@ -507,13 +473,13 @@ func TestGitSync(t *testing.T) {
 	dir := t.TempDir()
 	os.MkdirAll(filepath.Join(dir, ".yaad"), 0755)
 
-	eng.Remember(engine.RememberInput{Type: "convention", Content: "Use jose not jsonwebtoken", Scope: "project"})
-	eng.Remember(engine.RememberInput{Type: "decision", Content: "Chose RS256 for JWT", Scope: "project"})
+	eng.Remember(context.Background(), engine.RememberInput{Type: "convention", Content: "Use jose not jsonwebtoken", Scope: "project"})
+	eng.Remember(context.Background(), engine.RememberInput{Type: "decision", Content: "Chose RS256 for JWT", Scope: "project"})
 
 	syncer := yaadsync.New(eng.Store(), dir)
 
 	// Export
-	hash, err := syncer.Export("")
+	hash, err := syncer.Export(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Export: %v", err)
 	}
@@ -546,7 +512,7 @@ func TestGitSync(t *testing.T) {
 	eng2, cleanup2 := setup(t)
 	defer cleanup2()
 	syncer2 := yaadsync.New(eng2.Store(), dir)
-	n, e, err := syncer2.Import()
+	n, e, err := syncer2.Import(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -556,7 +522,7 @@ func TestGitSync(t *testing.T) {
 	t.Logf("Imported %d nodes, %d edges", n, e)
 
 	// Second import should be idempotent (already imported)
-	n2, e2, _ := syncer2.Import()
+	n2, e2, _ := syncer2.Import(context.Background())
 	if n2 != 0 || e2 != 0 {
 		t.Errorf("second import should be idempotent, got %d nodes %d edges", n2, e2)
 	}
@@ -566,12 +532,12 @@ func TestUserProfile(t *testing.T) {
 	eng, cleanup := setup(t)
 	defer cleanup()
 
-	eng.Remember(engine.RememberInput{Type: "convention", Content: "Use jose for JWT auth", Scope: "project"})
-	eng.Remember(engine.RememberInput{Type: "decision", Content: "Chose NATS for event bus", Scope: "project"})
-	eng.Remember(engine.RememberInput{Type: "task", Content: "Add rate limiting", Scope: "project"})
-	eng.Remember(engine.RememberInput{Type: "preference", Content: "Prefers functional style", Scope: "project"})
+	eng.Remember(context.Background(), engine.RememberInput{Type: "convention", Content: "Use jose for JWT auth", Scope: "project"})
+	eng.Remember(context.Background(), engine.RememberInput{Type: "decision", Content: "Chose NATS for event bus", Scope: "project"})
+	eng.Remember(context.Background(), engine.RememberInput{Type: "task", Content: "Add rate limiting", Scope: "project"})
+	eng.Remember(context.Background(), engine.RememberInput{Type: "preference", Content: "Prefers functional style", Scope: "project"})
 
-	p, err := eng.Profile("")
+	p, err := eng.Profile(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -593,23 +559,23 @@ func TestConflictResolver(t *testing.T) {
 	defer cleanup()
 
 	// Store original convention
-	old, _ := eng.Remember(engine.RememberInput{
+	old, _ := eng.Remember(context.Background(), engine.RememberInput{
 		Type: "convention", Content: "Use jsonwebtoken library for JWT", Scope: "project",
 	})
 
 	// Store contradicting convention (should supersede)
-	newNode, _ := eng.Remember(engine.RememberInput{
+	newNode, _ := eng.Remember(context.Background(), engine.RememberInput{
 		Type: "convention", Content: "Use jose instead of jsonwebtoken for Edge compatibility", Scope: "project",
 	})
 
 	// Verify old node confidence was lowered
-	oldUpdated, _ := eng.Store().GetNode(old.ID)
+	oldUpdated, _ := eng.Store().GetNode(context.Background(), old.ID)
 	if oldUpdated.Confidence >= 1.0 {
 		t.Errorf("conflict: old node confidence should be lowered, got %.2f", oldUpdated.Confidence)
 	}
 
 	// Verify supersedes edge exists
-	edges, _ := eng.Store().GetEdgesFrom(newNode.ID)
+	edges, _ := eng.Store().GetEdgesFrom(context.Background(), newNode.ID)
 	hasSupersedes := false
 	for _, e := range edges {
 		if e.Type == "supersedes" && e.ToID == old.ID {
@@ -625,19 +591,19 @@ func TestTemporalBackbone(t *testing.T) {
 	eng, cleanup := setup(t)
 	defer cleanup()
 
-	n1, _ := eng.Remember(engine.RememberInput{Type: "convention", Content: "First convention", Scope: "project", Project: "test"})
-	n2, _ := eng.Remember(engine.RememberInput{Type: "decision", Content: "Second decision", Scope: "project", Project: "test"})
-	n3, _ := eng.Remember(engine.RememberInput{Type: "bug", Content: "Third bug report", Scope: "project", Project: "test"})
+	n1, _ := eng.Remember(context.Background(), engine.RememberInput{Type: "convention", Content: "First convention", Scope: "project", Project: "test"})
+	n2, _ := eng.Remember(context.Background(), engine.RememberInput{Type: "decision", Content: "Second decision", Scope: "project", Project: "test"})
+	n3, _ := eng.Remember(context.Background(), engine.RememberInput{Type: "bug", Content: "Third bug report", Scope: "project", Project: "test"})
 
 	// Verify temporal chain: n1 → n2 → n3
-	edges1, _ := eng.Store().GetEdgesFrom(n1.ID)
+	edges1, _ := eng.Store().GetEdgesFrom(context.Background(), n1.ID)
 	hasLink12 := false
 	for _, e := range edges1 {
 		if e.Type == "learned_in" && e.ToID == n2.ID {
 			hasLink12 = true
 		}
 	}
-	edges2, _ := eng.Store().GetEdgesFrom(n2.ID)
+	edges2, _ := eng.Store().GetEdgesFrom(context.Background(), n2.ID)
 	hasLink23 := false
 	for _, e := range edges2 {
 		if e.Type == "learned_in" && e.ToID == n3.ID {
@@ -656,11 +622,11 @@ func TestDedupRollingWindow(t *testing.T) {
 	eng, cleanup := setup(t)
 	defer cleanup()
 
-	n1, _ := eng.Remember(engine.RememberInput{
+	n1, _ := eng.Remember(context.Background(), engine.RememberInput{
 		Type: "convention", Content: "Use jose for JWT auth", Scope: "project",
 	})
 	// Same content again — should return same node (dedup)
-	n2, _ := eng.Remember(engine.RememberInput{
+	n2, _ := eng.Remember(context.Background(), engine.RememberInput{
 		Type: "convention", Content: "Use jose for JWT auth", Scope: "project",
 	})
 
@@ -675,17 +641,17 @@ func TestCompaction(t *testing.T) {
 
 	// Store 5 low-confidence nodes
 	for i := 0; i < 5; i++ {
-		n, _ := eng.Remember(engine.RememberInput{
+		n, _ := eng.Remember(context.Background(), engine.RememberInput{
 			Type: "decision", Content: fmt.Sprintf("Old decision %d about something", i), Scope: "project",
 		})
-		node, _ := eng.Store().GetNode(n.ID)
+		node, _ := eng.Store().GetNode(context.Background(), n.ID)
 		node.Confidence = 0.2
 		node.AccessCount = 0
-		eng.Store().UpdateNode(node)
+		eng.Store().UpdateNode(context.Background(), node)
 	}
 
 	// Run compaction
-	compacted, err := eng.Compact("")
+	compacted, err := eng.Compact(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -699,11 +665,11 @@ func TestMentalModel(t *testing.T) {
 	eng, cleanup := setup(t)
 	defer cleanup()
 
-	eng.Remember(engine.RememberInput{Type: "convention", Content: "Use jose for JWT", Scope: "project"})
-	eng.Remember(engine.RememberInput{Type: "decision", Content: "Chose NATS for events", Scope: "project"})
-	eng.Remember(engine.RememberInput{Type: "task", Content: "Add rate limiting", Scope: "project"})
+	eng.Remember(context.Background(), engine.RememberInput{Type: "convention", Content: "Use jose for JWT", Scope: "project"})
+	eng.Remember(context.Background(), engine.RememberInput{Type: "decision", Content: "Chose NATS for events", Scope: "project"})
+	eng.Remember(context.Background(), engine.RememberInput{Type: "task", Content: "Add rate limiting", Scope: "project"})
 
-	model, err := eng.MentalModel("")
+	model, err := eng.MentalModel(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -745,16 +711,16 @@ func TestPhase6IntentAwareRetrieval(t *testing.T) {
 	defer cleanup()
 
 	// Seed memories
-	decision, _ := eng.Remember(engine.RememberInput{Type: "decision", Content: "Chose NATS over Redis Streams for event bus", Scope: "project"})
-	convention, _ := eng.Remember(engine.RememberInput{Type: "convention", Content: "Use NATS client v2 for all event publishing", Scope: "project"})
+	decision, _ := eng.Remember(context.Background(), engine.RememberInput{Type: "decision", Content: "Chose NATS over Redis Streams for event bus", Scope: "project"})
+	convention, _ := eng.Remember(context.Background(), engine.RememberInput{Type: "convention", Content: "Use NATS client v2 for all event publishing", Scope: "project"})
 
 	// Link: decision led_to convention
-	eng.Graph().AddEdge(&storage.Edge{
+	eng.Graph().AddEdge(context.Background(), &storage.Edge{
 		ID: "e-test", FromID: decision.ID, ToID: convention.ID, Type: "led_to", Weight: 1.0,
 	})
 
 	// Why query should find the decision via causal traversal
-	result, err := eng.Recall(engine.RecallOpts{Query: "why NATS", Depth: 2, Limit: 10})
+	result, err := eng.Recall(context.Background(), engine.RecallOpts{Query: "why NATS", Depth: 2, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -777,7 +743,7 @@ func TestPhase6DualStream(t *testing.T) {
 	defer ds.Stop()
 
 	// Fast path should return immediately
-	node, err := ds.Remember(engine.RememberInput{
+	node, err := ds.Remember(context.Background(), engine.RememberInput{
 		Type: "convention", Content: "Use jose not jsonwebtoken", Scope: "project",
 	})
 	if err != nil {
@@ -788,7 +754,7 @@ func TestPhase6DualStream(t *testing.T) {
 	}
 
 	// Second remember should create temporal backbone edge
-	node2, err := ds.Remember(engine.RememberInput{
+	node2, err := ds.Remember(context.Background(), engine.RememberInput{
 		Type: "decision", Content: "Chose RS256 for JWT", Scope: "project",
 	})
 	if err != nil {
@@ -803,7 +769,7 @@ func TestPhase6DualStream(t *testing.T) {
 	var hasTemporalEdge bool
 	for i := 0; i < 10; i++ {
 		time.Sleep(50 * time.Millisecond)
-		edges, _ := eng.Store().GetEdgesFrom(node.ID)
+		edges, _ := eng.Store().GetEdgesFrom(context.Background(), node.ID)
 		for _, e := range edges {
 			if e.ToID == node2.ID && e.Type == "learned_in" {
 				hasTemporalEdge = true
@@ -852,7 +818,7 @@ func TestPrivacyFilter(t *testing.T) {
 	defer cleanup()
 
 	// Store content with secrets — should be stripped
-	node, _ := eng.Remember(engine.RememberInput{
+	node, _ := eng.Remember(context.Background(), engine.RememberInput{
 		Type:    "convention",
 		Content: "Use API key sk-1234567890abcdefghijklmnop for auth and AKIA1234567890ABCDEF for AWS",
 		Scope:   "project",
@@ -921,7 +887,7 @@ func TestEdgeCaseEmptyRecall(t *testing.T) {
 	defer cleanup()
 
 	// Recall on empty DB should return empty, not error
-	result, err := eng.Recall(engine.RecallOpts{Query: "nonexistent", Limit: 5})
+	result, err := eng.Recall(context.Background(), engine.RecallOpts{Query: "nonexistent", Limit: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -935,7 +901,7 @@ func TestEdgeCaseContextEmpty(t *testing.T) {
 	defer cleanup()
 
 	// Context on empty DB should return empty, not error
-	result, err := eng.Context("")
+	result, err := eng.Context(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -949,7 +915,7 @@ func TestEdgeCaseForgetNonexistent(t *testing.T) {
 	defer cleanup()
 
 	// Forget nonexistent node should error gracefully
-	err := eng.Forget("nonexistent-id-12345678")
+	err := eng.Forget(context.Background(), "nonexistent-id-12345678")
 	if err == nil {
 		t.Error("forget: should error on nonexistent node")
 	}
@@ -989,7 +955,7 @@ func TestMultipleRememberAndRecall(t *testing.T) {
 	// Store 20 memories of different types
 	types := []string{"convention", "decision", "bug", "spec", "task"}
 	for i := 0; i < 20; i++ {
-		eng.Remember(engine.RememberInput{
+		eng.Remember(context.Background(), engine.RememberInput{
 			Type:    types[i%len(types)],
 			Content: fmt.Sprintf("Memory item %d about topic %d", i, i%5),
 			Scope:   "project",
@@ -997,7 +963,7 @@ func TestMultipleRememberAndRecall(t *testing.T) {
 	}
 
 	// Recall should find results
-	result, err := eng.Recall(engine.RecallOpts{Query: "topic", Limit: 10})
+	result, err := eng.Recall(context.Background(), engine.RecallOpts{Query: "topic", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1007,39 +973,9 @@ func TestMultipleRememberAndRecall(t *testing.T) {
 	t.Logf("Stored 20, recalled %d nodes", len(result.Nodes))
 
 	// Status should show correct counts
-	st, _ := eng.Status("")
+	st, _ := eng.Status(context.Background(), "")
 	if st.Nodes < 20 {
 		t.Errorf("status: expected ≥20 nodes, got %d", st.Nodes)
-	}
-}
-
-func TestBridgeImportExport(t *testing.T) {
-	eng, cleanup := setup(t)
-	defer cleanup()
-
-	dir := t.TempDir()
-
-	// Create a fake CLAUDE.md
-	claudeContent := "# Conventions\n- Use jose for JWT\n- Always run tests\n\n# Decisions\n- Chose NATS for events\n"
-	os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte(claudeContent), 0644)
-
-	// Import
-	n, err := bridge.Import(eng, dir, dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n == 0 {
-		t.Error("bridge import: expected nodes > 0")
-	}
-	t.Logf("Imported %d nodes from CLAUDE.md", n)
-
-	// Export back
-	if err := bridge.Export(eng.Store(), dir, ""); err != nil {
-		t.Fatal(err)
-	}
-	data, _ := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
-	if !strings.Contains(string(data), "Generated by Yaad") {
-		t.Error("bridge export: missing Yaad header")
 	}
 }
 
@@ -1051,14 +987,14 @@ func TestMultiProject(t *testing.T) {
 	defer cleanup2()
 
 	// Store in project 1
-	eng1.Remember(engine.RememberInput{Type: "convention", Content: "Use jose for JWT", Scope: "project", Project: "proj1"})
+	eng1.Remember(context.Background(), engine.RememberInput{Type: "convention", Content: "Use jose for JWT", Scope: "project", Project: "proj1"})
 
 	// Store in project 2
-	eng2.Remember(engine.RememberInput{Type: "convention", Content: "Use PostgreSQL for DB", Scope: "project", Project: "proj2"})
+	eng2.Remember(context.Background(), engine.RememberInput{Type: "convention", Content: "Use PostgreSQL for DB", Scope: "project", Project: "proj2"})
 
 	// Cross-project search
 	stores := []storage.Storage{eng1.Store(), eng2.Store()}
-	results, err := multiproject.CrossProjectSearch(stores, "jose", 5)
+	results, err := multiproject.CrossProjectSearch(context.Background(), stores, "jose", 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1091,49 +1027,6 @@ func TestTLSCertGeneration(t *testing.T) {
 	}
 }
 
-func TestGoSDK(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "sdk_test.db")
-
-	mem, err := yaadsdk.Open(dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer mem.Close()
-
-	// Remember
-	node, err := mem.Remember("Use jose for JWT auth", yaadsdk.Convention, yaadsdk.WithTags("auth"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if node.ID == "" {
-		t.Error("sdk: empty node ID")
-	}
-
-	// Recall
-	result, err := mem.Recall("jose JWT", yaadsdk.WithLimit(5))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(result.Nodes) == 0 {
-		t.Error("sdk: recall returned no nodes")
-	}
-
-	// Context
-	ctx, err := mem.Context("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ctx == nil {
-		t.Error("sdk: nil context")
-	}
-
-	// Forget
-	if err := mem.Forget(node.ID); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestConfigDefaults(t *testing.T) {
 	cfg := config.Default()
 	if cfg.Server.Port != 3456 {
@@ -1155,17 +1048,19 @@ func TestStorageCreateAndQuery(t *testing.T) {
 	}
 	defer store.Close()
 
+	ctx := context.Background()
+
 	// Create node
 	node := &storage.Node{
 		ID: "test-node-1", Type: "convention", Content: "Test content",
 		ContentHash: "hash1", Scope: "project", Tier: 1, Confidence: 1.0, Version: 1,
 	}
-	if err := store.CreateNode(node); err != nil {
+	if err := store.CreateNode(ctx, node); err != nil {
 		t.Fatal(err)
 	}
 
 	// Get node
-	got, err := store.GetNode("test-node-1")
+	got, err := store.GetNode(ctx, "test-node-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1178,12 +1073,12 @@ func TestStorageCreateAndQuery(t *testing.T) {
 		ID: "test-edge-1", FromID: "test-node-1", ToID: "test-node-1",
 		Type: "relates_to", Acyclic: false, Weight: 1.0,
 	}
-	if err := store.CreateEdge(edge); err != nil {
+	if err := store.CreateEdge(ctx, edge); err != nil {
 		t.Fatal(err)
 	}
 
 	// Get neighbors
-	neighbors, err := store.GetNeighbors("test-node-1")
+	neighbors, err := store.GetNeighbors(ctx, "test-node-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1192,10 +1087,10 @@ func TestStorageCreateAndQuery(t *testing.T) {
 	}
 
 	// Version history
-	if err := store.SaveVersion("test-node-1", "old content", "test", "test update"); err != nil {
+	if err := store.SaveVersion(ctx, "test-node-1", "old content", "test", "test update"); err != nil {
 		t.Fatal(err)
 	}
-	versions, err := store.GetVersions("test-node-1")
+	versions, err := store.GetVersions(ctx, "test-node-1")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -118,7 +118,7 @@ func (s *GRPCServer) grpcRemember(_ interface{}, ctx context.Context, dec func(i
 	if err := dec(&in); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
-	node, err := s.eng.Remember(in)
+	node, err := s.eng.Remember(ctx, in)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
@@ -131,7 +131,7 @@ func (s *GRPCServer) grpcRecall(_ interface{}, ctx context.Context, dec func(int
 	if err := dec(&opts); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
-	result, err := s.eng.Recall(opts)
+	result, err := s.eng.Recall(ctx, opts)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
@@ -143,7 +143,7 @@ func (s *GRPCServer) grpcContext(_ interface{}, ctx context.Context, dec func(in
 	if err := dec(&req); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
-	result, err := s.eng.Context(req.Project)
+	result, err := s.eng.Context(ctx, req.Project)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
@@ -155,7 +155,7 @@ func (s *GRPCServer) grpcForget(_ interface{}, ctx context.Context, dec func(int
 	if err := dec(&req); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
-	if err := s.eng.Forget(req.ID); err != nil {
+	if err := s.eng.Forget(ctx, req.ID); err != nil {
 		return nil, status.Errorf(codes.NotFound, "%v", err)
 	}
 	return map[string]string{}, nil
@@ -173,7 +173,7 @@ func (s *GRPCServer) grpcLink(_ interface{}, ctx context.Context, dec func(inter
 	edge := &storage.Edge{
 		ID: uuid.New().String(), FromID: req.FromID, ToID: req.ToID, Type: req.Type, Weight: 1.0,
 	}
-	if err := s.eng.Graph().AddEdge(edge); err != nil {
+	if err := s.eng.Graph().AddEdge(ctx, edge); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	return GRPCEdge{ID: edge.ID, FromID: edge.FromID, ToID: edge.ToID, Type: edge.Type, Acyclic: edge.Acyclic, Weight: edge.Weight}, nil
@@ -184,7 +184,7 @@ func (s *GRPCServer) grpcUnlink(_ interface{}, ctx context.Context, dec func(int
 	if err := dec(&req); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
-	if err := s.eng.Graph().RemoveEdge(req.ID); err != nil {
+	if err := s.eng.Graph().RemoveEdge(ctx, req.ID); err != nil {
 		return nil, status.Errorf(codes.NotFound, "%v", err)
 	}
 	return map[string]string{}, nil
@@ -201,7 +201,7 @@ func (s *GRPCServer) grpcSubgraph(_ interface{}, ctx context.Context, dec func(i
 	if req.Depth == 0 {
 		req.Depth = 2
 	}
-	sg, err := s.eng.Graph().ExtractSubgraph(req.ID, req.Depth)
+	sg, err := s.eng.Graph().ExtractSubgraph(ctx, req.ID, req.Depth)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
@@ -219,13 +219,13 @@ func (s *GRPCServer) grpcImpact(_ interface{}, ctx context.Context, dec func(int
 	if req.Depth == 0 {
 		req.Depth = 3
 	}
-	ids, err := s.eng.Graph().Impact(req.File, req.Depth)
+	ids, err := s.eng.Graph().Impact(ctx, req.File, req.Depth)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
 	var nodes []*GRPCNode
 	for _, id := range ids {
-		if n, err := s.eng.Store().GetNode(id); err == nil {
+		if n, err := s.eng.Store().GetNode(ctx, id); err == nil {
 			nodes = append(nodes, storageToGRPC(n))
 		}
 	}
@@ -240,7 +240,7 @@ func (s *GRPCServer) grpcSessionStart(_ interface{}, ctx context.Context, dec fu
 	if err := dec(&req); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
-	result, err := s.eng.Context(req.Project)
+	result, err := s.eng.Context(ctx, req.Project)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
@@ -255,7 +255,7 @@ func (s *GRPCServer) grpcSessionEnd(_ interface{}, ctx context.Context, dec func
 	if err := dec(&req); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
-	if err := s.eng.Store().EndSession(req.ID, req.Summary); err != nil {
+	if err := s.eng.Store().EndSession(ctx, req.ID, req.Summary); err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
 	return map[string]string{"id": req.ID, "summary": req.Summary}, nil
@@ -266,7 +266,7 @@ func (s *GRPCServer) grpcHealth(_ interface{}, ctx context.Context, dec func(int
 }
 
 func (s *GRPCServer) grpcGraphStats(_ interface{}, ctx context.Context, dec func(interface{}) error, _ grpc.UnaryServerInterceptor) (interface{}, error) {
-	st, err := s.eng.Status("")
+	st, err := s.eng.Status(ctx, "")
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}

@@ -3,6 +3,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -100,15 +101,17 @@ type errMsg struct{ err error }
 
 func loadDashboard(eng *engine.Engine) tea.Cmd {
 	return func() tea.Msg {
-		stats, _ := eng.Status("")
-		ctx, _ := eng.Context("")
-		return dashboardMsg{stats: stats, hotNodes: ctx.Nodes}
+		ctx := context.Background()
+		stats, _ := eng.Status(ctx, "")
+		res, _ := eng.Context(ctx, "")
+		return dashboardMsg{stats: stats, hotNodes: res.Nodes}
 	}
 }
 
 func doSearch(eng *engine.Engine, query string) tea.Cmd {
 	return func() tea.Msg {
-		result, err := eng.Recall(engine.RecallOpts{Query: query, Depth: 2, Limit: 20})
+		ctx := context.Background()
+		result, err := eng.Recall(ctx, engine.RecallOpts{Query: query, Depth: 2, Limit: 20})
 		if err != nil {
 			return errMsg{err}
 		}
@@ -183,7 +186,7 @@ func (m Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if len(m.results) > 0 {
 			m.detail = m.results[m.cursor]
-			edges, _ := m.eng.Store().GetEdgesFrom(m.detail.ID)
+			edges, _ := m.eng.Store().GetEdgesFrom(context.Background(), m.detail.ID)
 			m.edges = edges
 			m.scroll = 0
 			m.screen = ScreenDetail

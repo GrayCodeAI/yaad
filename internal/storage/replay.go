@@ -1,6 +1,9 @@
 package storage
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // ReplayEvent is a raw tool event stored for session replay.
 type ReplayEvent struct {
@@ -11,16 +14,22 @@ type ReplayEvent struct {
 }
 
 // AddReplayEvent stores a tool event for replay.
-func (s *Store) AddReplayEvent(sessionID, data string) error {
-	_, err := s.db.Exec(
+func (s *Store) AddReplayEvent(ctx context.Context, sessionID, data string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO replay_events(session_id, data, created_at) VALUES(?,?,?)`,
 		sessionID, data, time.Now())
 	return err
 }
 
 // GetReplayEvents returns all events for a session in order.
-func (s *Store) GetReplayEvents(sessionID string) ([]*ReplayEvent, error) {
-	rows, err := s.db.Query(
+func (s *Store) GetReplayEvents(ctx context.Context, sessionID string) ([]*ReplayEvent, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, session_id, data, created_at FROM replay_events WHERE session_id=? ORDER BY id`,
 		sessionID)
 	if err != nil {

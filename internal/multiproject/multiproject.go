@@ -2,6 +2,7 @@
 package multiproject
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -10,7 +11,7 @@ import (
 
 // LinkProjects creates a cross-project edge between two nodes in different stores.
 // The edge is stored in the global store (dst) as a relates_to edge.
-func LinkProjects(globalStore *storage.Store, nodeA, projectA, nodeB, projectB string) error {
+func LinkProjects(ctx context.Context, globalStore *storage.Store, nodeA, projectA, nodeB, projectB string) error {
 	edge := &storage.Edge{
 		ID:     uuid.New().String(),
 		FromID: nodeA,
@@ -19,14 +20,14 @@ func LinkProjects(globalStore *storage.Store, nodeA, projectA, nodeB, projectB s
 		Weight: 1.0,
 		Metadata: `{"cross_project":true,"project_a":"` + projectA + `","project_b":"` + projectB + `"}`,
 	}
-	return globalStore.CreateEdge(edge)
+	return globalStore.CreateEdge(ctx, edge)
 }
 
 // ResolveGlobalEntity finds or creates a global entity node that represents
 // the same concept across multiple projects (e.g., "PostgreSQL", "jose").
-func ResolveGlobalEntity(globalStore *storage.Store, name, entityType string) (*storage.Node, error) {
+func ResolveGlobalEntity(ctx context.Context, globalStore *storage.Store, name, entityType string) (*storage.Node, error) {
 	hash := name + ":global:entity"
-	existing, _ := globalStore.SearchNodeByHash(hashStr(hash), "global", "")
+	existing, _ := globalStore.SearchNodeByHash(ctx, hashStr(hash), "global", "")
 	if existing != nil {
 		return existing, nil
 	}
@@ -40,14 +41,14 @@ func ResolveGlobalEntity(globalStore *storage.Store, name, entityType string) (*
 		Confidence:  1.0,
 		Version:     1,
 	}
-	return node, globalStore.CreateNode(node)
+	return node, globalStore.CreateNode(ctx, node)
 }
 
 // CrossProjectSearch searches for nodes matching a query across multiple stores.
-func CrossProjectSearch(stores []storage.Storage, query string, limit int) ([]*storage.Node, error) {
+func CrossProjectSearch(ctx context.Context, stores []storage.Storage, query string, limit int) ([]*storage.Node, error) {
 	var all []*storage.Node
 	for _, store := range stores {
-		nodes, err := store.SearchNodes(query, limit)
+		nodes, err := store.SearchNodes(ctx, query, limit)
 		if err != nil {
 			continue
 		}

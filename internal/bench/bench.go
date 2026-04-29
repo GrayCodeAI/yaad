@@ -3,6 +3,7 @@
 package bench
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -42,7 +43,7 @@ func (r *Result) String() string {
 }
 
 // Run evaluates retrieval accuracy on a set of QA pairs.
-func Run(eng *engine.Engine, qas []QA, depth, limit int) *Result {
+func Run(ctx context.Context, eng *engine.Engine, qas []QA, depth, limit int) *Result {
 	result := &Result{
 		Total:  len(qas),
 		HitAtK: map[int]int{1: 0, 3: 0, 5: 0, 10: 0},
@@ -52,7 +53,7 @@ func Run(eng *engine.Engine, qas []QA, depth, limit int) *Result {
 	mrrSum := 0.0
 
 	for _, qa := range qas {
-		nodes, err := eng.Recall(engine.RecallOpts{
+		nodes, err := eng.Recall(ctx, engine.RecallOpts{
 			Query: qa.Question,
 			Depth: depth,
 			Limit: limit,

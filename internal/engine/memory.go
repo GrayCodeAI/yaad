@@ -1,9 +1,12 @@
 package engine
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
-	"log"
+	"log/slog"
+	"sort"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,6 +22,40 @@ import (
 	"github.com/GrayCodeAI/yaad/internal/temporal"
 )
 
+// Validation and default constants.
+const (
+	maxContentLength    = 10000 // characters
+	defaultRecallDepth  = 2
+	defaultRecallLimit  = 10
+	confidenceBoost     = 0.2
+	minConfidence       = 0.1
+	halfLifeDays        = 30.0
+	busyTimeoutMs       = 5000
+	compactThreshold    = 50000
+	defaultDecayBoost   = 0.2
+)
+
+var validNodeTypes = map[string]bool{
+	"convention": true,
+	"decision":   true,
+	"bug":        true,
+	"spec":       true,
+	"task":       true,
+	"preference": true,
+	"skill":      true,
+	"file":       true,
+	"entity":     true,
+	"session":    true,
+}
+
+// Metrics tracks basic engine operation counters.
+type Metrics struct {
+	Remembers   int64
+	Recalls     int64
+	Errors      int64
+	NodesStored int64
+}
+
 // Engine is the core memory engine wrapping graph + storage.
 type Engine struct {
 	store    storage.Storage
@@ -26,6 +63,7 @@ type Engine struct {
 	dedup    *dedup.Window
 	temporal *temporal.Backbone
 	conflict *conflict.Resolver
+	metrics  Metrics
 }
 
 // New creates a memory engine.
@@ -66,8 +104,32 @@ type EdgeInput struct {
 	Type string
 }
 
+// validateRememberInput checks that input meets basic constraints.
+func validateRememberInput(in RememberInput) error {
+	if len(in.Content) == 0 {
+		return fmt.Errorf("content cannot be empty")
+	}
+	if len(in.Content) > maxContentLength {
+		return fmt.Errorf("content exceeds max length of %d characters", maxContentLength)
+	}
+	if in.Type != "" && !validNodeTypes[in.Type] {
+		return fmt.Errorf("invalid node type: %q", in.Type)
+	}
+	return nil
+}
+
 // Remember creates a memory node with privacy filtering, dedup, and entity extraction.
-func (e *Engine) Remember(in RememberInput) (*storage.Node, error) {
+func (e *Engine) Remember(ctx context.Context, in RememberInput) (*storage.Node, error) {
+	atomic.AddInt64(&e.metrics.Remembers, 1)
+	if err := ctx.Err(); err != nil {
+		atomic.AddInt64(&e.metrics.Errors, 1)
+		return nil, err
+	}
+	if err := validateRememberInput(in); err != nil {
+		atomic.AddInt64(&e.metrics.Errors, 1)
+		return nil, err
+	}
+
 	// 1. Privacy filter
 	content := privacy.Filter(in.Content)
 	summary := privacy.Filter(in.Summary)
@@ -84,7 +146,7 @@ func (e *Engine) Remember(in RememberInput) (*storage.Node, error) {
 	if e.dedup.IsDuplicate(content) {
 		// Find existing by hash and boost
 		hash := contentHash(content, in.Scope, in.Project)
-		existing, _ := e.store.SearchNodeByHash(hash, in.Scope, in.Project)
+		existing, _ := e.store.SearchNodeByHash(ctx, hash, in.Scope, in.Project)
 		if existing != nil {
 			return existing, nil
 		}
@@ -93,13 +155,15 @@ func (e *Engine) Remember(in RememberInput) (*storage.Node, error) {
 	// 4. Content hash for exact dedup
 	hash := contentHash(content, in.Scope, in.Project)
 
-	// 4. Check dedup — if exists, boost confidence
-	existing, _ := e.store.SearchNodeByHash(hash, in.Scope, in.Project)
+	// 4. Check dedup — if exists, boost confidence and return
+	existing, _ := e.store.SearchNodeByHash(ctx, hash, in.Scope, in.Project)
 	if existing != nil {
 		existing.Confidence = min(existing.Confidence+0.2, 1.0)
 		existing.AccessCount++
 		existing.AccessedAt = time.Now()
-		logErr("update node", e.store.UpdateNode(existing))
+		if err := e.store.UpdateNode(ctx, existing); err != nil {
+			return nil, fmt.Errorf("dedup boost failed: %w", err)
+		}
 		return existing, nil
 	}
 
@@ -119,42 +183,47 @@ func (e *Engine) Remember(in RememberInput) (*storage.Node, error) {
 		SourceAgent:   in.Agent,
 		Version:       1,
 	}
-	if err := e.graph.AddNode(node); err != nil {
-		return nil, err
+	if err := e.graph.AddNode(ctx, node); err != nil {
+		return nil, fmt.Errorf("create node failed: %w", err)
 	}
 
-	// 6. Extract entities and create anchor nodes + edges
+	// 6. Extract entities and create anchor nodes + edges (best-effort)
 	entities := ExtractEntities(content)
 	for _, ent := range entities {
-		entNode := e.getOrCreateAnchor(ent.Name, ent.Type, in.Scope, in.Project)
+		entNode := e.getOrCreateAnchor(ctx, ent.Name, ent.Type, in.Scope, in.Project)
 		if entNode != nil {
-			logErr("link entity", e.graph.AddEdge(&storage.Edge{
+			_ = e.graph.AddEdge(ctx, &storage.Edge{
 				ID:     uuid.New().String(),
 				FromID: node.ID,
 				ToID:   entNode.ID,
 				Type:   "touches",
 				Weight: 1.0,
-			}))
+			})
 		}
 	}
 
-	// 7. Create explicit edges
+	// 7. Create explicit edges (fail if user-requested edges can't be created)
 	for _, ei := range in.Edges {
-		logErr("link edge", e.graph.AddEdge(&storage.Edge{
+		if err := e.graph.AddEdge(ctx, &storage.Edge{
 			ID:     uuid.New().String(),
 			FromID: node.ID,
 			ToID:   ei.ToID,
 			Type:   ei.Type,
 			Weight: 1.0,
-		}))
+		}); err != nil {
+			return nil, fmt.Errorf("link edge failed: %w", err)
+		}
 	}
 
 	// 8. Temporal backbone — auto-link to previous node in timeline
-	logErr("temporal link", e.temporal.Link(node.ID, in.Project))
+	if err := e.temporal.Link(ctx, node.ID, in.Project); err != nil {
+		return nil, fmt.Errorf("temporal link failed: %w", err)
+	}
 
-	// 9. Conflict resolution — detect and supersede contradictions
-	_, _ = e.conflict.CheckAndResolve(node)
+	// 9. Conflict resolution — detect and supersede contradictions (best-effort)
+	_, _ = e.conflict.CheckAndResolve(ctx, node)
 
+	atomic.AddInt64(&e.metrics.NodesStored, 1)
 	return node, nil
 }
 
@@ -175,7 +244,12 @@ type RecallResult struct {
 }
 
 // Recall performs graph-aware hybrid search: BM25 seed → graph expand → rank.
-func (e *Engine) Recall(opts RecallOpts) (*RecallResult, error) {
+func (e *Engine) Recall(ctx context.Context, opts RecallOpts) (*RecallResult, error) {
+	atomic.AddInt64(&e.metrics.Recalls, 1)
+	if err := ctx.Err(); err != nil {
+		atomic.AddInt64(&e.metrics.Errors, 1)
+		return nil, err
+	}
 	if opts.Depth == 0 {
 		opts.Depth = 2
 	}
@@ -184,7 +258,7 @@ func (e *Engine) Recall(opts RecallOpts) (*RecallResult, error) {
 	}
 
 	// Stage 1: BM25 seed nodes
-	seeds, err := e.store.SearchNodes(opts.Query, opts.Limit)
+	seeds, err := e.store.SearchNodes(ctx, opts.Query, opts.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -205,17 +279,17 @@ func (e *Engine) Recall(opts RecallOpts) (*RecallResult, error) {
 	for _, seed := range seeds {
 		nodeMap[seed.ID] = seed
 		// Use IntentBFS for intent-aware traversal
-		ids, err := e.graph.IntentBFS(seed.ID, opts.Depth, queryIntent)
+		ids, err := e.graph.IntentBFS(ctx, seed.ID, opts.Depth, queryIntent)
 		if err != nil {
 			continue
 		}
 		for _, id := range ids {
-			if n, err := e.store.GetNode(id); err == nil {
+			if n, err := e.store.GetNode(ctx, id); err == nil {
 				nodeMap[n.ID] = n
 			}
 		}
 		// Also get edges for the subgraph
-		sg, err := e.graph.ExtractSubgraph(seed.ID, opts.Depth)
+		sg, err := e.graph.ExtractSubgraph(ctx, seed.ID, opts.Depth)
 		if err == nil {
 			allEdges = append(allEdges, sg.Edges...)
 		}
@@ -224,10 +298,12 @@ func (e *Engine) Recall(opts RecallOpts) (*RecallResult, error) {
 	// Stage 3: Rank by confidence × recency
 	nodes := make([]*storage.Node, 0, len(nodeMap))
 	for _, n := range nodeMap {
-		// Boost access
+		// Boost access (best-effort — don't fail recall if update fails)
 		n.AccessCount++
 		n.AccessedAt = time.Now()
-		logErr("update node", e.store.UpdateNode(n))
+		if err := e.store.UpdateNode(ctx, n); err != nil {
+			slog.Warn("recall: failed to boost access count", "node_id", n.ID, "error", err)
+		}
 		nodes = append(nodes, n)
 	}
 	sortByScore(nodes)
@@ -251,9 +327,12 @@ func (e *Engine) Recall(opts RecallOpts) (*RecallResult, error) {
 }
 
 // Context returns the hot-tier subgraph for session start injection.
-func (e *Engine) Context(project string) (*RecallResult, error) {
+func (e *Engine) Context(ctx context.Context, project string) (*RecallResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// Load hot tier nodes
-	hotNodes, err := e.store.ListNodes(storage.NodeFilter{
+	hotNodes, err := e.store.ListNodes(ctx, storage.NodeFilter{
 		Tier: 1, Project: project, MinConfidence: 0.3,
 	})
 	if err != nil {
@@ -261,7 +340,7 @@ func (e *Engine) Context(project string) (*RecallResult, error) {
 	}
 
 	// Load active tasks
-	tasks, err := e.store.ListNodes(storage.NodeFilter{
+	tasks, err := e.store.ListNodes(ctx, storage.NodeFilter{
 		Type: "task", Project: project, MinConfidence: 0.1,
 	})
 	if err != nil {
@@ -287,15 +366,20 @@ func (e *Engine) Context(project string) (*RecallResult, error) {
 }
 
 // Forget archives a node by setting confidence to 0.
-func (e *Engine) Forget(id string) error {
-	node, err := e.store.GetNode(id)
+func (e *Engine) Forget(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	node, err := e.store.GetNode(ctx, id)
 	if err != nil {
 		return err
 	}
 	// Save version before archiving
-	logErr("save version", e.store.SaveVersion(node.ID, node.Content, "system", "archived"))
+	if err := e.store.SaveVersion(ctx, node.ID, node.Content, "system", "archived"); err != nil {
+		return fmt.Errorf("save version failed: %w", err)
+	}
 	node.Confidence = 0
-	return e.store.UpdateNode(node)
+	return e.store.UpdateNode(ctx, node)
 }
 
 // Status returns basic stats.
@@ -306,37 +390,55 @@ type Status struct {
 }
 
 // Compact merges low-confidence memories to keep the graph lean.
-func (e *Engine) Compact(project string) (int, error) {
+func (e *Engine) Compact(ctx context.Context, project string) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	c := compact.New(e.store, 50000)
-	return c.Compact(project)
+	return c.Compact(ctx, project)
 }
 
 // MentalModel generates an auto-evolving project summary.
-func (e *Engine) MentalModel(project string) (*mental.Model, error) {
-	return mental.Generate(e.store, project)
+func (e *Engine) MentalModel(ctx context.Context, project string) (*mental.Model, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return mental.Generate(ctx, e.store, project)
 }
 
 // Profile returns an auto-maintained user/project profile (static facts + dynamic context).
-func (e *Engine) Profile(project string) (*profile.Profile, error) {
-	return profile.Build(e.store, project)
+func (e *Engine) Profile(ctx context.Context, project string) (*profile.Profile, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return profile.Build(ctx, e.store, project)
 }
 
-func (e *Engine) Status(project string) (*Status, error) {
-	nodes, err := e.store.ListNodes(storage.NodeFilter{Project: project})
+func (e *Engine) Status(ctx context.Context, project string) (*Status, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	nodes, err := e.store.ListNodes(ctx, storage.NodeFilter{Project: project})
 	if err != nil {
 		return nil, err
 	}
-	sessions, err := e.store.ListSessions(project, 1000)
+	sessions, err := e.store.ListSessions(ctx, project, 1000)
 	if err != nil {
 		return nil, err
 	}
-	// Count edges (approximate via node edges)
-	edgeCount := 0
-	for _, n := range nodes {
-		edges, _ := e.store.GetEdgesFrom(n.ID)
-		edgeCount += len(edges)
-	}
+	// Count total edges with a single query instead of N+1
+	edgeCount, _ := e.store.CountAllEdges(ctx)
 	return &Status{Nodes: len(nodes), Edges: edgeCount, Sessions: len(sessions)}, nil
+}
+
+// GetMetrics returns a copy of the engine's operational metrics.
+func (e *Engine) GetMetrics() Metrics {
+	return Metrics{
+		Remembers:   atomic.LoadInt64(&e.metrics.Remembers),
+		Recalls:     atomic.LoadInt64(&e.metrics.Recalls),
+		Errors:      atomic.LoadInt64(&e.metrics.Errors),
+		NodesStored: atomic.LoadInt64(&e.metrics.NodesStored),
+	}
 }
 
 // --- helpers ---
@@ -357,9 +459,9 @@ func defaultTier(nodeType string) int {
 	}
 }
 
-func (e *Engine) getOrCreateAnchor(name, typ, scope, project string) *storage.Node {
+func (e *Engine) getOrCreateAnchor(ctx context.Context, name, typ, scope, project string) *storage.Node {
 	hash := contentHash(name, scope, project)
-	existing, _ := e.store.SearchNodeByHash(hash, scope, project)
+	existing, _ := e.store.SearchNodeByHash(ctx, hash, scope, project)
 	if existing != nil {
 		return existing
 	}
@@ -374,7 +476,7 @@ func (e *Engine) getOrCreateAnchor(name, typ, scope, project string) *storage.No
 		Confidence:  1.0,
 		Version:     1,
 	}
-	if err := e.store.CreateNode(node); err != nil {
+	if err := e.store.CreateNode(ctx, node); err != nil {
 		return nil
 	}
 	return node
@@ -401,17 +503,10 @@ func filterNodes(nodes []*storage.Node, opts RecallOpts) []*storage.Node {
 }
 
 func sortByScore(nodes []*storage.Node) {
-	// Simple sort: confidence × recency
 	now := time.Now()
-	for i := 0; i < len(nodes); i++ {
-		for j := i + 1; j < len(nodes); j++ {
-			si := score(nodes[i], now)
-			sj := score(nodes[j], now)
-			if sj > si {
-				nodes[i], nodes[j] = nodes[j], nodes[i]
-			}
-		}
-	}
+	sort.Slice(nodes, func(i, j int) bool {
+		return score(nodes[i], now) > score(nodes[j], now)
+	})
 }
 
 func score(n *storage.Node, now time.Time) float64 {
@@ -436,9 +531,4 @@ func min(a, b float64) float64 {
 	return b
 }
 
-// logErr logs non-nil errors from fire-and-forget operations.
-func logErr(op string, err error) {
-	if err != nil {
-		log.Printf("[yaad:warn] %s: %v", op, err)
-	}
-}
+

@@ -6,14 +6,19 @@ import (
 	"github.com/GrayCodeAI/yaad/internal/storage"
 )
 
+const (
+	charsPerToken    = 4  // approximation: 1 token ≈ 4 characters
+	nodeSizeOverhead = 50 // bytes of overhead per node (ID, type, metadata)
+)
+
 // TrimToTokenBudget trims a node list to fit within a token budget.
 // Approximation: 1 token ≈ 4 characters.
 func TrimToTokenBudget(nodes []*storage.Node, budget int) []*storage.Node {
-	chars := budget * 4
+	chars := budget * charsPerToken
 	used := 0
 	var out []*storage.Node
 	for _, n := range nodes {
-		size := len(n.Content) + len(n.Summary) + len(n.Tags) + 50 // overhead
+		size := len(n.Content) + len(n.Summary) + len(n.Tags) + nodeSizeOverhead
 		if used+size > chars {
 			break
 		}

@@ -3,6 +3,7 @@
 package skill
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -29,12 +30,12 @@ type Skill struct {
 }
 
 // Store saves a skill as a node in the memory graph.
-func Store(eng *engine.Engine, s *Skill, project string) (*storage.Node, error) {
+func Store(ctx context.Context, eng *engine.Engine, s *Skill, project string) (*storage.Node, error) {
 	b, err := json.Marshal(s)
 	if err != nil {
 		return nil, err
 	}
-	return eng.Remember(engine.RememberInput{
+	return eng.Remember(ctx, engine.RememberInput{
 		Type:    "skill",
 		Content: fmt.Sprintf("Skill: %s\n%s", s.Name, string(b)),
 		Summary: s.Description,
@@ -45,8 +46,8 @@ func Store(eng *engine.Engine, s *Skill, project string) (*storage.Node, error) 
 }
 
 // Load retrieves a skill by name from the memory graph.
-func Load(store storage.Storage, name, project string) (*Skill, error) {
-	nodes, err := store.SearchNodes("Skill: "+name, 5)
+func Load(ctx context.Context, store storage.Storage, name, project string) (*Skill, error) {
+	nodes, err := store.SearchNodes(ctx, "Skill: "+name, 5)
 	if err != nil {
 		return nil, err
 	}
@@ -59,8 +60,8 @@ func Load(store storage.Storage, name, project string) (*Skill, error) {
 }
 
 // ListSkills returns all skill nodes for a project.
-func ListSkills(store storage.Storage, project string) ([]*Skill, error) {
-	nodes, err := store.ListNodes(storage.NodeFilter{Type: "skill", Project: project})
+func ListSkills(ctx context.Context, store storage.Storage, project string) ([]*Skill, error) {
+	nodes, err := store.ListNodes(ctx, storage.NodeFilter{Type: "skill", Project: project})
 	if err != nil {
 		return nil, err
 	}

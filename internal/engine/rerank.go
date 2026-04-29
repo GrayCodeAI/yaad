@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"sort"
 	"time"
 
@@ -8,10 +9,10 @@ import (
 )
 
 // Rerank re-scores nodes combining RRF score, graph centrality, recency, and confidence.
-func Rerank(nodes []*ScoredNode, store storage.Storage) []*ScoredNode {
+func Rerank(ctx context.Context, nodes []*ScoredNode, store storage.Storage) []*ScoredNode {
 	now := time.Now()
 	for _, sn := range nodes {
-		sn.Score = combinedScore(sn, store, now)
+		sn.Score = combinedScore(ctx, sn, store, now)
 	}
 	sort.Slice(nodes, func(i, j int) bool {
 		return nodes[i].Score > nodes[j].Score
@@ -19,11 +20,11 @@ func Rerank(nodes []*ScoredNode, store storage.Storage) []*ScoredNode {
 	return nodes
 }
 
-func combinedScore(sn *ScoredNode, store storage.Storage, now time.Time) float64 {
+func combinedScore(ctx context.Context, sn *ScoredNode, store storage.Storage, now time.Time) float64 {
 	n := sn.Node
 
 	// Centrality: count inbound edges (more connections = more important)
-	inbound, _ := store.GetEdgesTo(n.ID)
+	inbound, _ := store.GetEdgesTo(ctx, n.ID)
 	centrality := 1.0 + float64(len(inbound))*0.1
 
 	// Recency: exponential decay over 30 days

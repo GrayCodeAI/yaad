@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 )
@@ -19,29 +20,39 @@ func newMockStorage() *mockStorage {
 	}
 }
 
-func (m *mockStorage) CreateNode(n *Node) error {
+func (m *mockStorage) CreateNode(ctx context.Context, n *Node) error {
 	m.nodes[n.ID] = n
 	return nil
 }
 
-func (m *mockStorage) GetNode(id string) (*Node, error) {
+func (m *mockStorage) GetNode(ctx context.Context, id string) (*Node, error) {
 	if n, ok := m.nodes[id]; ok {
 		return n, nil
 	}
 	return nil, sql.ErrNoRows
 }
 
-func (m *mockStorage) UpdateNode(n *Node) error {
+func (m *mockStorage) GetNodesBatch(ctx context.Context, ids []string) ([]*Node, error) {
+	var out []*Node
+	for _, id := range ids {
+		if n, ok := m.nodes[id]; ok {
+			out = append(out, n)
+		}
+	}
+	return out, nil
+}
+
+func (m *mockStorage) UpdateNode(ctx context.Context, n *Node) error {
 	m.nodes[n.ID] = n
 	return nil
 }
 
-func (m *mockStorage) DeleteNode(id string) error {
+func (m *mockStorage) DeleteNode(ctx context.Context, id string) error {
 	delete(m.nodes, id)
 	return nil
 }
 
-func (m *mockStorage) ListNodes(f NodeFilter) ([]*Node, error) {
+func (m *mockStorage) ListNodes(ctx context.Context, f NodeFilter) ([]*Node, error) {
 	var out []*Node
 	for _, n := range m.nodes {
 		if f.Type != "" && n.Type != f.Type {
@@ -64,11 +75,11 @@ func (m *mockStorage) ListNodes(f NodeFilter) ([]*Node, error) {
 	return out, nil
 }
 
-func (m *mockStorage) SearchNodes(query string, limit int) ([]*Node, error) {
-	return m.ListNodes(NodeFilter{})
+func (m *mockStorage) SearchNodes(ctx context.Context, query string, limit int) ([]*Node, error) {
+	return m.ListNodes(ctx, NodeFilter{})
 }
 
-func (m *mockStorage) SearchNodeByHash(hash, scope, project string) (*Node, error) {
+func (m *mockStorage) SearchNodeByHash(ctx context.Context, hash, scope, project string) (*Node, error) {
 	for _, n := range m.nodes {
 		if n.ContentHash == hash && n.Scope == scope && n.Project == project {
 			return n, nil
@@ -77,28 +88,28 @@ func (m *mockStorage) SearchNodeByHash(hash, scope, project string) (*Node, erro
 	return nil, sql.ErrNoRows
 }
 
-func (m *mockStorage) GetNeighbors(nodeID string) ([]*Node, error) {
+func (m *mockStorage) GetNeighbors(ctx context.Context, nodeID string) ([]*Node, error) {
 	return nil, nil
 }
 
-func (m *mockStorage) CreateEdge(e *Edge) error {
+func (m *mockStorage) CreateEdge(ctx context.Context, e *Edge) error {
 	m.edges[e.ID] = e
 	return nil
 }
 
-func (m *mockStorage) GetEdge(id string) (*Edge, error) {
+func (m *mockStorage) GetEdge(ctx context.Context, id string) (*Edge, error) {
 	if e, ok := m.edges[id]; ok {
 		return e, nil
 	}
 	return nil, sql.ErrNoRows
 }
 
-func (m *mockStorage) DeleteEdge(id string) error {
+func (m *mockStorage) DeleteEdge(ctx context.Context, id string) error {
 	delete(m.edges, id)
 	return nil
 }
 
-func (m *mockStorage) GetEdgesFrom(nodeID string) ([]*Edge, error) {
+func (m *mockStorage) GetEdgesFrom(ctx context.Context, nodeID string) ([]*Edge, error) {
 	var out []*Edge
 	for _, e := range m.edges {
 		if e.FromID == nodeID {
@@ -108,7 +119,7 @@ func (m *mockStorage) GetEdgesFrom(nodeID string) ([]*Edge, error) {
 	return out, nil
 }
 
-func (m *mockStorage) GetEdgesTo(nodeID string) ([]*Edge, error) {
+func (m *mockStorage) GetEdgesTo(ctx context.Context, nodeID string) ([]*Edge, error) {
 	var out []*Edge
 	for _, e := range m.edges {
 		if e.ToID == nodeID {
@@ -118,60 +129,106 @@ func (m *mockStorage) GetEdgesTo(nodeID string) ([]*Edge, error) {
 	return out, nil
 }
 
-func (m *mockStorage) CreateSession(sess *Session) error {
+func (m *mockStorage) CountEdges(ctx context.Context, nodeID string) (inbound int, outbound int, err error) {
+	for _, e := range m.edges {
+		if e.FromID == nodeID {
+			outbound++
+		}
+		if e.ToID == nodeID {
+			inbound++
+		}
+	}
+	return inbound, outbound, nil
+}
+
+func (m *mockStorage) CountAllEdges(ctx context.Context) (int, error) {
+	return len(m.edges), nil
+}
+
+func (m *mockStorage) CheckCycle(ctx context.Context, fromID, toID string) (bool, error) {
+	// Simple cycle check for mock: walk backwards from fromID
+	seen := map[string]bool{}
+	var walk func(id string) bool
+	walk = func(id string) bool {
+		if id == toID {
+			return true
+		}
+		if seen[id] {
+			return false
+		}
+		seen[id] = true
+		for _, e := range m.edges {
+			if e.ToID == id && IsAcyclic(e.Type) {
+				if walk(e.FromID) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return walk(fromID), nil
+}
+
+func (m *mockStorage) CreateSession(ctx context.Context, sess *Session) error {
 	return nil
 }
 
-func (m *mockStorage) EndSession(id string, summary string) error {
+func (m *mockStorage) EndSession(ctx context.Context, id string, summary string) error {
 	return nil
 }
 
-func (m *mockStorage) ListSessions(project string, limit int) ([]*Session, error) {
+func (m *mockStorage) ListSessions(ctx context.Context, project string, limit int) ([]*Session, error) {
 	return nil, nil
 }
 
-func (m *mockStorage) SaveVersion(nodeID string, content, changedBy, reason string) error {
+func (m *mockStorage) SaveVersion(ctx context.Context, nodeID string, content, changedBy, reason string) error {
 	return nil
 }
 
-func (m *mockStorage) GetVersions(nodeID string) ([]*NodeVersion, error) {
+func (m *mockStorage) GetVersions(ctx context.Context, nodeID string) ([]*NodeVersion, error) {
 	return nil, nil
 }
 
-func (m *mockStorage) SaveEmbedding(nodeID, model string, vector []float32) error {
+func (m *mockStorage) SaveEmbedding(ctx context.Context, nodeID, model string, vector []float32) error {
 	return nil
 }
 
-func (m *mockStorage) DeleteEmbedding(nodeID string) error {
+func (m *mockStorage) DeleteEmbedding(ctx context.Context, nodeID string) error {
 	return nil
 }
 
-func (m *mockStorage) AllEmbeddings() (map[string][]float32, error) {
+func (m *mockStorage) AllEmbeddings(ctx context.Context) (map[string][]float32, error) {
 	return nil, nil
 }
 
-func (m *mockStorage) GetEmbeddingsBatch(offset, limit int) (map[string][]float32, error) {
+func (m *mockStorage) GetEmbeddingsBatch(ctx context.Context, offset, limit int) (map[string][]float32, error) {
 	return nil, nil
 }
 
-func (m *mockStorage) AddFileWatch(filePath, nodeID, gitHash string) error {
+func (m *mockStorage) AddFileWatch(ctx context.Context, filePath, nodeID, gitHash string) error {
 	return nil
 }
 
-func (m *mockStorage) AddReplayEvent(sessionID, data string) error {
+func (m *mockStorage) AddReplayEvent(ctx context.Context, sessionID, data string) error {
 	return nil
 }
 
-func (m *mockStorage) GetReplayEvents(sessionID string) ([]*ReplayEvent, error) {
+func (m *mockStorage) GetReplayEvents(ctx context.Context, sessionID string) ([]*ReplayEvent, error) {
 	return nil, nil
 }
 
-func (m *mockStorage) DB() *sql.DB {
-	return nil
+func (m *mockStorage) WithTx(ctx context.Context, fn func(Storage) error) error {
+	return fn(m)
 }
 
 func (m *mockStorage) Close() error {
 	return nil
+}
+
+// IsAcyclic returns true if the edge type enforces DAG constraint.
+func IsAcyclic(edgeType string) bool {
+	return edgeType == "caused_by" || edgeType == "led_to" || edgeType == "supersedes" ||
+		edgeType == "learned_in" || edgeType == "part_of"
 }
 
 // TestMockStorageCompiles verifies the mock implements Storage.
@@ -182,13 +239,14 @@ func TestMockStorageCompiles(t *testing.T) {
 // TestMockStorageCRUD verifies basic CRUD on the mock.
 func TestMockStorageCRUD(t *testing.T) {
 	m := newMockStorage()
+	ctx := context.Background()
 
 	node := &Node{ID: "n1", Type: "convention", Content: "test", ContentHash: "h1", Scope: "project"}
-	if err := m.CreateNode(node); err != nil {
+	if err := m.CreateNode(ctx, node); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := m.GetNode("n1")
+	got, err := m.GetNode(ctx, "n1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,11 +255,11 @@ func TestMockStorageCRUD(t *testing.T) {
 	}
 
 	edge := &Edge{ID: "e1", FromID: "n1", ToID: "n1", Type: "relates_to"}
-	if err := m.CreateEdge(edge); err != nil {
+	if err := m.CreateEdge(ctx, edge); err != nil {
 		t.Fatal(err)
 	}
 
-	edges, err := m.GetEdgesFrom("n1")
+	edges, err := m.GetEdgesFrom(ctx, "n1")
 	if err != nil {
 		t.Fatal(err)
 	}

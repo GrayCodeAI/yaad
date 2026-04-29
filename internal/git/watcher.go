@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"os/exec"
 	"strings"
 	"time"
@@ -29,7 +30,7 @@ func New(store storage.Storage, g graph.Graph, dir string) *Watcher {
 }
 
 // StalesSince returns stale reports for files changed since the given time.
-func (w *Watcher) StalesSince(since time.Time) ([]StaleReport, error) {
+func (w *Watcher) StalesSince(ctx context.Context, since time.Time) ([]StaleReport, error) {
 	files, err := w.changedFiles(since)
 	if err != nil {
 		return nil, err
@@ -37,7 +38,7 @@ func (w *Watcher) StalesSince(since time.Time) ([]StaleReport, error) {
 
 	var reports []StaleReport
 	for _, file := range files {
-		ids, err := w.graph.Impact(file, 3)
+		ids, err := w.graph.Impact(ctx, file, 3)
 		if err != nil || len(ids) == 0 {
 			continue
 		}
@@ -71,8 +72,8 @@ func (w *Watcher) changedFiles(since time.Time) ([]string, error) {
 }
 
 // WatchFile registers a file→node mapping for staleness tracking.
-func (w *Watcher) WatchFile(filePath, nodeID, gitHash string) error {
-	return w.store.AddFileWatch(filePath, nodeID, gitHash)
+func (w *Watcher) WatchFile(ctx context.Context, filePath, nodeID, gitHash string) error {
+	return w.store.AddFileWatch(ctx, filePath, nodeID, gitHash)
 }
 
 // CurrentHash returns the current git HEAD hash.

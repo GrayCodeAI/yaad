@@ -45,7 +45,7 @@ func (h *HybridSearch) Search(ctx context.Context, query string, opts RecallOpts
 	queryIntent := intent.Classify(query)
 
 	// Path 1: BM25 seed nodes
-	bm25Nodes, _ := h.store.SearchNodes(query, opts.Limit*2)
+	bm25Nodes, _ := h.store.SearchNodes(ctx, query, opts.Limit*2)
 	bm25Ranks := rankMap(bm25Nodes)
 
 	// Path 2: Vector seed nodes (if provider available)
@@ -53,7 +53,7 @@ func (h *HybridSearch) Search(ctx context.Context, query string, opts RecallOpts
 	if h.provider != nil {
 		vec, err := h.provider.Embed(ctx, query)
 		if err == nil {
-			vectorRanks = h.vectorSearch(vec, opts.Limit*2)
+			vectorRanks = h.vectorSearch(ctx, vec, opts.Limit*2)
 		}
 	}
 
@@ -61,7 +61,7 @@ func (h *HybridSearch) Search(ctx context.Context, query string, opts RecallOpts
 	graphRanks := map[string]int{}
 	rank := 1
 	for _, id := range mergeKeys(bm25Ranks, vectorRanks) {
-		ids, err := h.graph.IntentBFS(id, opts.Depth, queryIntent)
+		ids, err := h.graph.IntentBFS(ctx, id, opts.Depth, queryIntent)
 		if err != nil {
 			continue
 		}
@@ -77,13 +77,11 @@ func (h *HybridSearch) Search(ctx context.Context, query string, opts RecallOpts
 	// For When/temporal queries, boost recently accessed nodes
 	temporalRanks := map[string]int{}
 	if queryIntent == intent.IntentWhen {
-		recent, _ := h.store.ListNodes(storage.NodeFilter{Project: opts.Project})
+		recent, _ := h.store.ListNodes(ctx, storage.NodeFilter{Project: opts.Project})
 		// Sort by accessed_at descending (most recent first)
-		for i := 1; i < len(recent); i++ {
-			for j := i; j > 0 && recent[j].AccessedAt.After(recent[j-1].AccessedAt); j-- {
-				recent[j], recent[j-1] = recent[j-1], recent[j]
-			}
-		}
+		sort.Slice(recent, func(i, j int) bool {
+			return recent[i].AccessedAt.After(recent[j].AccessedAt)
+		})
 		for i, n := range recent {
 			if i >= opts.Limit*2 {
 				break
@@ -96,7 +94,7 @@ func (h *HybridSearch) Search(ctx context.Context, query string, opts RecallOpts
 	allIDs := mergeKeys(bm25Ranks, vectorRanks, graphRanks, temporalRanks)
 	scored := make([]*ScoredNode, 0, len(allIDs))
 	for _, id := range allIDs {
-		node, err := h.store.GetNode(id)
+		node, err := h.store.GetNode(ctx, id)
 		if err != nil {
 			continue
 		}
@@ -122,19 +120,30 @@ func (h *HybridSearch) Search(ctx context.Context, query string, opts RecallOpts
 }
 
 // vectorSearch returns a rank map of node IDs by cosine similarity.
-func (h *HybridSearch) vectorSearch(queryVec []float32, limit int) map[string]int {
-	all, err := h.store.AllEmbeddings()
-	if err != nil {
-		return nil
-	}
+// Uses batched pagination to avoid loading all embeddings into memory at once.
+func (h *HybridSearch) vectorSearch(ctx context.Context, queryVec []float32, limit int) map[string]int {
 	type pair struct {
 		id    string
 		score float32
 	}
 	var pairs []pair
-	for id, vec := range all {
-		pairs = append(pairs, pair{id, embeddings.Cosine(queryVec, vec)})
+
+	const batchSize = 500
+	offset := 0
+	for {
+		batch, err := h.store.GetEmbeddingsBatch(ctx, offset, batchSize)
+		if err != nil || len(batch) == 0 {
+			break
+		}
+		for id, vec := range batch {
+			pairs = append(pairs, pair{id, embeddings.Cosine(queryVec, vec)})
+		}
+		if len(batch) < batchSize {
+			break
+		}
+		offset += batchSize
 	}
+
 	sort.Slice(pairs, func(i, j int) bool { return pairs[i].score > pairs[j].score })
 	ranks := map[string]int{}
 	for i, p := range pairs {

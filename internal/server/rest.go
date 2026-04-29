@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	stdtls "crypto/tls"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/GrayCodeAI/yaad/internal/bench"
-	"github.com/GrayCodeAI/yaad/internal/bridge"
 	"github.com/GrayCodeAI/yaad/internal/embeddings"
 	"github.com/GrayCodeAI/yaad/internal/engine"
 	"github.com/GrayCodeAI/yaad/internal/exportimport"
@@ -18,6 +18,9 @@ import (
 	"github.com/GrayCodeAI/yaad/internal/storage"
 	"github.com/GrayCodeAI/yaad/internal/team"
 )
+
+// version is set at build time via -ldflags.
+var version = "dev"
 
 // RESTServer serves the HTTP API.
 type RESTServer struct {
@@ -45,11 +48,19 @@ func (s *RESTServer) WithTLS(cfg *stdtls.Config) *RESTServer {
 	return s
 }
 
-// ListenAndServe starts the HTTP server.
+// ListenAndServe starts the HTTP server with middleware.
 func (s *RESTServer) ListenAndServe() error {
 	mux := http.NewServeMux()
 	s.RegisterRoutes(mux)
-	srv := &http.Server{Addr: s.addr, Handler: mux, TLSConfig: s.tlsCfg}
+	wrapped := s.withMiddleware(mux)
+	srv := &http.Server{
+		Addr:         s.addr,
+		Handler:      http.TimeoutHandler(wrapped, 30*time.Second, `{"error":"request timeout"}`),
+		TLSConfig:    s.tlsCfg,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
 	if s.tlsCfg != nil {
 		fmt.Printf("yaad REST API (HTTPS) listening on %s\n", s.addr)
 		ln, err := stdtls.Listen("tcp", s.addr, s.tlsCfg)
@@ -60,6 +71,22 @@ func (s *RESTServer) ListenAndServe() error {
 	}
 	fmt.Printf("yaad REST API listening on %s\n", s.addr)
 	return srv.ListenAndServe()
+}
+
+// withMiddleware wraps the handler with panic recovery and request logging.
+func (s *RESTServer) withMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		// Panic recovery
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("http panic recovered", "path", r.URL.Path, "panic", rec)
+				httpErr(w, fmt.Errorf("internal server error"), 500)
+			}
+		}()
+		next.ServeHTTP(w, r)
+		slog.Debug("http request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(start).String())
+	})
 }
 
 // RegisterRoutes registers all routes on the given mux (useful for testing).
@@ -74,6 +101,7 @@ func (s *RESTServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /yaad/impact/{file...}", s.handleImpact)
 	mux.HandleFunc("DELETE /yaad/forget/{id}", s.handleForget)
 	mux.HandleFunc("GET /yaad/health", s.handleHealth)
+	mux.HandleFunc("GET /yaad/version", s.handleVersion)
 	mux.HandleFunc("GET /yaad/graph/stats", s.handleStats)
 	mux.HandleFunc("GET /yaad/sessions", s.handleSessions)
 	mux.HandleFunc("POST /yaad/session/start", s.handleSessionStart)
@@ -85,8 +113,6 @@ func (s *RESTServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /yaad/feedback", s.handleFeedback)
 	mux.HandleFunc("POST /yaad/decay", s.handleDecay)
 	mux.HandleFunc("POST /yaad/gc", s.handleGC)
-	mux.HandleFunc("POST /yaad/bridge/import", s.handleBridgeImport)
-	mux.HandleFunc("POST /yaad/bridge/export", s.handleBridgeExport)
 	mux.HandleFunc("GET /yaad/events", s.SSE.ServeHTTP)
 	mux.HandleFunc("GET /yaad/replay/{session_id}", s.handleReplay)
 	ServeDashboard(mux)
@@ -111,7 +137,7 @@ func (s *RESTServer) handleRemember(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, err, 400)
 		return
 	}
-	node, err := s.eng.Remember(in)
+	node, err := s.eng.Remember(r.Context(), in)
 	if err != nil {
 		httpErr(w, err, 500)
 		return
@@ -127,7 +153,7 @@ func (s *RESTServer) handleRecall(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, err, 400)
 		return
 	}
-	result, err := s.eng.Recall(opts)
+	result, err := s.eng.Recall(r.Context(), opts)
 	if err != nil {
 		httpErr(w, err, 500)
 		return
@@ -137,7 +163,7 @@ func (s *RESTServer) handleRecall(w http.ResponseWriter, r *http.Request) {
 
 func (s *RESTServer) handleContext(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
-	result, err := s.eng.Context(project)
+	result, err := s.eng.Context(r.Context(), project)
 	if err != nil {
 		httpErr(w, err, 500)
 		return
@@ -154,7 +180,7 @@ func (s *RESTServer) handleLink(w http.ResponseWriter, r *http.Request) {
 	if edge.ID == "" {
 		edge.ID = uuid.New().String()
 	}
-	if err := s.eng.Graph().AddEdge(&edge); err != nil {
+	if err := s.eng.Graph().AddEdge(r.Context(), &edge); err != nil {
 		httpErr(w, err, 400)
 		return
 	}
@@ -163,7 +189,7 @@ func (s *RESTServer) handleLink(w http.ResponseWriter, r *http.Request) {
 
 func (s *RESTServer) handleDeleteLink(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := s.eng.Graph().RemoveEdge(id); err != nil {
+	if err := s.eng.Graph().RemoveEdge(r.Context(), id); err != nil {
 		httpErr(w, err, 404)
 		return
 	}
@@ -172,19 +198,19 @@ func (s *RESTServer) handleDeleteLink(w http.ResponseWriter, r *http.Request) {
 
 func (s *RESTServer) handleGetNode(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	node, err := s.eng.Store().GetNode(id)
+	node, err := s.eng.Store().GetNode(r.Context(), id)
 	if err != nil {
 		httpErr(w, err, 404)
 		return
 	}
-	neighbors, _ := s.eng.Store().GetNeighbors(id)
+	neighbors, _ := s.eng.Store().GetNeighbors(r.Context(), id)
 	httpJSON(w, map[string]any{"node": node, "neighbors": neighbors}, 200)
 }
 
 func (s *RESTServer) handleSubgraph(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	depth := intQuery(r, "depth", 2)
-	sg, err := s.eng.Graph().ExtractSubgraph(id, depth)
+	sg, err := s.eng.Graph().ExtractSubgraph(r.Context(), id, depth)
 	if err != nil {
 		httpErr(w, err, 500)
 		return
@@ -195,14 +221,14 @@ func (s *RESTServer) handleSubgraph(w http.ResponseWriter, r *http.Request) {
 func (s *RESTServer) handleImpact(w http.ResponseWriter, r *http.Request) {
 	file := r.PathValue("file")
 	depth := intQuery(r, "depth", 3)
-	ids, err := s.eng.Graph().Impact(file, depth)
+	ids, err := s.eng.Graph().Impact(r.Context(), file, depth)
 	if err != nil {
 		httpErr(w, err, 500)
 		return
 	}
 	var nodes []*storage.Node
 	for _, id := range ids {
-		if n, err := s.eng.Store().GetNode(id); err == nil {
+		if n, err := s.eng.Store().GetNode(r.Context(), id); err == nil {
 			nodes = append(nodes, n)
 		}
 	}
@@ -211,20 +237,30 @@ func (s *RESTServer) handleImpact(w http.ResponseWriter, r *http.Request) {
 
 func (s *RESTServer) handleForget(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := s.eng.Forget(id); err != nil {
+	if err := s.eng.Forget(r.Context(), id); err != nil {
 		httpErr(w, err, 404)
 		return
 	}
 	httpJSON(w, map[string]string{"status": "forgotten"}, 200)
 }
 
-func (s *RESTServer) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	httpJSON(w, map[string]string{"status": "ok", "version": "0.1.0"}, 200)
+func (s *RESTServer) handleHealth(w http.ResponseWriter, r *http.Request) {
+	// Actually verify database connectivity with a lightweight query
+	_, err := s.eng.Store().ListNodes(r.Context(), storage.NodeFilter{})
+	if err != nil {
+		httpJSON(w, map[string]string{"status": "error", "error": err.Error()}, 503)
+		return
+	}
+	httpJSON(w, map[string]string{"status": "ok", "version": version}, 200)
+}
+
+func (s *RESTServer) handleVersion(w http.ResponseWriter, _ *http.Request) {
+	httpJSON(w, map[string]string{"version": version}, 200)
 }
 
 func (s *RESTServer) handleStats(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
-	st, err := s.eng.Status(project)
+	st, err := s.eng.Status(r.Context(), project)
 	if err != nil {
 		httpErr(w, err, 500)
 		return
@@ -235,7 +271,7 @@ func (s *RESTServer) handleStats(w http.ResponseWriter, r *http.Request) {
 func (s *RESTServer) handleSessions(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 	limit := intQuery(r, "limit", 10)
-	sessions, err := s.eng.Store().ListSessions(project, limit)
+	sessions, err := s.eng.Store().ListSessions(r.Context(), project, limit)
 	if err != nil {
 		httpErr(w, err, 500)
 		return
@@ -255,12 +291,12 @@ func (s *RESTServer) handleSessionStart(w http.ResponseWriter, r *http.Request) 
 		Agent:     body.Agent,
 		StartedAt: time.Now(),
 	}
-	if err := s.eng.Store().CreateSession(sess); err != nil {
+	if err := s.eng.Store().CreateSession(r.Context(), sess); err != nil {
 		httpErr(w, err, 500)
 		return
 	}
-	ctx, _ := s.eng.Context(body.Project)
-	httpJSON(w, map[string]any{"session": sess, "context": ctx}, 201)
+	ctxRes, _ := s.eng.Context(r.Context(), body.Project)
+	httpJSON(w, map[string]any{"session": sess, "context": ctxRes}, 201)
 }
 
 func (s *RESTServer) handleSessionEnd(w http.ResponseWriter, r *http.Request) {
@@ -272,7 +308,7 @@ func (s *RESTServer) handleSessionEnd(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, err, 400)
 		return
 	}
-	if err := s.eng.Store().EndSession(body.ID, body.Summary); err != nil {
+	if err := s.eng.Store().EndSession(r.Context(), body.ID, body.Summary); err != nil {
 		httpErr(w, err, 500)
 		return
 	}
@@ -295,7 +331,7 @@ func (s *RESTServer) handleEmbed(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, fmt.Errorf("no embedding provider configured"), 503)
 		return
 	}
-	node, err := s.eng.Store().GetNode(body.NodeID)
+	node, err := s.eng.Store().GetNode(r.Context(), body.NodeID)
 	if err != nil {
 		httpErr(w, err, 404)
 		return
@@ -305,7 +341,7 @@ func (s *RESTServer) handleEmbed(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, err, 500)
 		return
 	}
-	if err := s.eng.Store().SaveEmbedding(node.ID, s.embedder.Name(), vec); err != nil {
+	if err := s.eng.Store().SaveEmbedding(r.Context(), node.ID, s.embedder.Name(), vec); err != nil {
 		httpErr(w, err, 500)
 		return
 	}
@@ -324,7 +360,7 @@ func (s *RESTServer) handleHybridRecall(w http.ResponseWriter, r *http.Request) 
 		httpErr(w, err, 500)
 		return
 	}
-	reranked := engine.Rerank(scored, s.eng.Store())
+	reranked := engine.Rerank(r.Context(), scored, s.eng.Store())
 	httpJSON(w, reranked, 200)
 }
 
@@ -353,23 +389,23 @@ func (s *RESTServer) handleFeedback(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, err, 400)
 		return
 	}
-	if err := s.eng.Feedback(body.ID, body.Action, body.NewContent); err != nil {
+	if err := s.eng.Feedback(r.Context(), body.ID, body.Action, body.NewContent); err != nil {
 		httpErr(w, err, 400)
 		return
 	}
 	httpJSON(w, map[string]string{"status": "ok"}, 200)
 }
 
-func (s *RESTServer) handleDecay(w http.ResponseWriter, _ *http.Request) {
-	if err := engine.RunDecay(s.eng.Store(), engine.DefaultDecayConfig); err != nil {
+func (s *RESTServer) handleDecay(w http.ResponseWriter, r *http.Request) {
+	if err := engine.RunDecay(r.Context(), s.eng.Store(), engine.DefaultDecayConfig); err != nil {
 		httpErr(w, err, 500)
 		return
 	}
 	httpJSON(w, map[string]string{"status": "decay applied"}, 200)
 }
 
-func (s *RESTServer) handleGC(w http.ResponseWriter, _ *http.Request) {
-	n, err := engine.GarbageCollect(s.eng.Store(), engine.DefaultDecayConfig)
+func (s *RESTServer) handleGC(w http.ResponseWriter, r *http.Request) {
+	n, err := engine.GarbageCollect(r.Context(), s.eng.Store(), engine.DefaultDecayConfig)
 	if err != nil {
 		httpErr(w, err, 500)
 		return
@@ -377,42 +413,9 @@ func (s *RESTServer) handleGC(w http.ResponseWriter, _ *http.Request) {
 	httpJSON(w, map[string]int{"removed": n}, 200)
 }
 
-func (s *RESTServer) handleBridgeImport(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Dir     string `json:"dir"`
-		Project string `json:"project"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		httpErr(w, err, 400)
-		return
-	}
-	n, err := bridge.Import(s.eng, body.Dir, body.Project)
-	if err != nil {
-		httpErr(w, err, 500)
-		return
-	}
-	httpJSON(w, map[string]int{"imported": n}, 200)
-}
-
-func (s *RESTServer) handleBridgeExport(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Dir     string `json:"dir"`
-		Project string `json:"project"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		httpErr(w, err, 400)
-		return
-	}
-	if err := bridge.Export(s.eng.Store(), body.Dir, body.Project); err != nil {
-		httpErr(w, err, 500)
-		return
-	}
-	httpJSON(w, map[string]string{"status": "exported"}, 200)
-}
-
 func (s *RESTServer) handleReplay(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("session_id")
-	events, err := s.eng.Store().GetReplayEvents(sessionID)
+	events, err := s.eng.Store().GetReplayEvents(r.Context(), sessionID)
 	if err != nil {
 		httpErr(w, err, 500)
 		return
@@ -422,7 +425,7 @@ func (s *RESTServer) handleReplay(w http.ResponseWriter, r *http.Request) {
 
 func (s *RESTServer) handleExportJSON(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
-	data, err := exportimport.ExportJSON(s.eng.Store(), project)
+	data, err := exportimport.ExportJSON(r.Context(), s.eng.Store(), project)
 	if err != nil {
 		httpErr(w, err, 500)
 		return
@@ -434,7 +437,7 @@ func (s *RESTServer) handleExportJSON(w http.ResponseWriter, r *http.Request) {
 
 func (s *RESTServer) handleExportMarkdown(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
-	md, err := exportimport.ExportMarkdown(s.eng.Store(), project)
+	md, err := exportimport.ExportMarkdown(r.Context(), s.eng.Store(), project)
 	if err != nil {
 		httpErr(w, err, 500)
 		return
@@ -453,7 +456,7 @@ func (s *RESTServer) handleExportObsidian(w http.ResponseWriter, r *http.Request
 		httpErr(w, err, 400)
 		return
 	}
-	n, err := exportimport.ExportObsidian(s.eng.Store(), body.Project, body.VaultDir)
+	n, err := exportimport.ExportObsidian(r.Context(), s.eng.Store(), body.Project, body.VaultDir)
 	if err != nil {
 		httpErr(w, err, 500)
 		return
@@ -467,7 +470,7 @@ func (s *RESTServer) handleImportJSON(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, err, 400)
 		return
 	}
-	nodes, edges, err := exportimport.ImportJSON(s.eng.Store(), data)
+	nodes, edges, err := exportimport.ImportJSON(r.Context(), s.eng.Store(), data)
 	if err != nil {
 		httpErr(w, err, 400)
 		return
@@ -482,7 +485,7 @@ func (s *RESTServer) handleTeamShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// For simplicity, share within the same store (global scope)
-	node, err := team.Share(s.eng.Store(), s.eng.Store(), body)
+	node, err := team.Share(r.Context(), s.eng.Store(), s.eng.Store(), body)
 	if err != nil {
 		httpErr(w, err, 500)
 		return
@@ -492,7 +495,7 @@ func (s *RESTServer) handleTeamShare(w http.ResponseWriter, r *http.Request) {
 
 func (s *RESTServer) handleTeamMemories(w http.ResponseWriter, r *http.Request) {
 	teamID := r.URL.Query().Get("team_id")
-	nodes, err := team.ListTeamMemories(s.eng.Store(), teamID)
+	nodes, err := team.ListTeamMemories(r.Context(), s.eng.Store(), teamID)
 	if err != nil {
 		httpErr(w, err, 500)
 		return
@@ -507,7 +510,7 @@ func (s *RESTServer) handleSkillStore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	project := r.URL.Query().Get("project")
-	node, err := skill.Store(s.eng, &sk, project)
+	node, err := skill.Store(r.Context(), s.eng, &sk, project)
 	if err != nil {
 		httpErr(w, err, 500)
 		return
@@ -517,7 +520,7 @@ func (s *RESTServer) handleSkillStore(w http.ResponseWriter, r *http.Request) {
 
 func (s *RESTServer) handleSkillList(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
-	skills, err := skill.ListSkills(s.eng.Store(), project)
+	skills, err := skill.ListSkills(r.Context(), s.eng.Store(), project)
 	if err != nil {
 		httpErr(w, err, 500)
 		return
@@ -528,7 +531,7 @@ func (s *RESTServer) handleSkillList(w http.ResponseWriter, r *http.Request) {
 func (s *RESTServer) handleSkillGet(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	project := r.URL.Query().Get("project")
-	sk, err := skill.Load(s.eng.Store(), name, project)
+	sk, err := skill.Load(r.Context(), s.eng.Store(), name, project)
 	if err != nil {
 		httpErr(w, err, 404)
 		return
@@ -537,13 +540,13 @@ func (s *RESTServer) handleSkillGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *RESTServer) handleBench(w http.ResponseWriter, r *http.Request) {
-	result := bench.Run(s.eng, bench.DefaultQAs(), 2, 10)
+	result := bench.Run(r.Context(), s.eng, bench.DefaultQAs(), 2, 10)
 	httpJSON(w, map[string]string{"report": result.String()}, 200)
 }
 
 func (s *RESTServer) handleCompact(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
-	n, err := s.eng.Compact(project)
+	n, err := s.eng.Compact(r.Context(), project)
 	if err != nil {
 		httpErr(w, err, 500)
 		return
@@ -553,7 +556,7 @@ func (s *RESTServer) handleCompact(w http.ResponseWriter, r *http.Request) {
 
 func (s *RESTServer) handleMentalModel(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
-	model, err := s.eng.MentalModel(project)
+	model, err := s.eng.MentalModel(r.Context(), project)
 	if err != nil {
 		httpErr(w, err, 500)
 		return
@@ -563,7 +566,7 @@ func (s *RESTServer) handleMentalModel(w http.ResponseWriter, r *http.Request) {
 
 func (s *RESTServer) handleProfile(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
-	p, err := s.eng.Profile(project)
+	p, err := s.eng.Profile(r.Context(), project)
 	if err != nil {
 		httpErr(w, err, 500)
 		return

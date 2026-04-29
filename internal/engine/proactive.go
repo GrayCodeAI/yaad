@@ -27,7 +27,7 @@ func (p *ProactiveContext) Predict(ctx context.Context, project string, budget i
 	candidates := map[string]*storage.Node{}
 
 	// 1. Recently accessed nodes (last 5 sessions worth)
-	recent, err := p.eng.store.ListNodes(storage.NodeFilter{Project: project})
+	recent, err := p.eng.store.ListNodes(ctx, storage.NodeFilter{Project: project})
 	if err != nil {
 		return nil, err
 	}
@@ -41,22 +41,22 @@ func (p *ProactiveContext) Predict(ctx context.Context, project string, budget i
 			break
 		}
 		candidates[n.ID] = n
-		neighbors, _ := p.eng.store.GetNeighbors(n.ID)
+		neighbors, _ := p.eng.store.GetNeighbors(ctx, n.ID)
 		for _, nb := range neighbors {
 			candidates[nb.ID] = nb
 		}
 	}
 
 	// 2. Active tasks and their dependencies
-	tasks, _ := p.eng.store.ListNodes(storage.NodeFilter{Type: "task", Project: project})
+	tasks, _ := p.eng.store.ListNodes(ctx, storage.NodeFilter{Type: "task", Project: project})
 	for _, t := range tasks {
 		if t.Confidence > 0.3 {
 			candidates[t.ID] = t
 			// Pull in nodes this task depends on
-			edges, _ := p.eng.store.GetEdgesFrom(t.ID)
+			edges, _ := p.eng.store.GetEdgesFrom(ctx, t.ID)
 			for _, e := range edges {
 				if e.Type == "depends_on" || e.Type == "relates_to" {
-					if n, err := p.eng.store.GetNode(e.ToID); err == nil {
+					if n, err := p.eng.store.GetNode(ctx, e.ToID); err == nil {
 						candidates[n.ID] = n
 					}
 				}
@@ -65,14 +65,14 @@ func (p *ProactiveContext) Predict(ctx context.Context, project string, budget i
 	}
 
 	// 3. High-centrality nodes (many inbound edges = important)
-	all, _ := p.eng.store.ListNodes(storage.NodeFilter{Project: project})
+	all, _ := p.eng.store.ListNodes(ctx, storage.NodeFilter{Project: project})
 	type centNode struct {
 		node     *storage.Node
 		inDegree int
 	}
 	var ranked []centNode
 	for _, n := range all {
-		edges, _ := p.eng.store.GetEdgesTo(n.ID)
+		edges, _ := p.eng.store.GetEdgesTo(ctx, n.ID)
 		ranked = append(ranked, centNode{n, len(edges)})
 	}
 	sort.Slice(ranked, func(i, j int) bool {

@@ -4,6 +4,7 @@
 package hooks
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -62,8 +63,8 @@ func ReadInput(r io.Reader) (*HookInput, error) {
 
 // SessionStart is called when an agent session begins.
 // Outputs hot-tier context to stdout for injection into the session.
-func (r *Runner) SessionStart(in *HookInput) error {
-	sessionID, err := r.eng.StartSession(r.project, in.Agent)
+func (r *Runner) SessionStart(ctx context.Context, in *HookInput) error {
+	sessionID, err := r.eng.StartSession(ctx, r.project, in.Agent)
 	if err != nil {
 		return err
 	}
@@ -72,7 +73,7 @@ func (r *Runner) SessionStart(in *HookInput) error {
 	_ = os.WriteFile(sessionFile(r.project), []byte(sessionID), 0644)
 
 	// Get context and print to stdout (Claude Code injects stdout into session)
-	result, err := r.eng.Context(r.project)
+	result, err := r.eng.Context(ctx, r.project)
 	if err != nil {
 		return err
 	}
@@ -81,7 +82,7 @@ func (r *Runner) SessionStart(in *HookInput) error {
 }
 
 // PostToolUse is called after each tool use. Captures the observation.
-func (r *Runner) PostToolUse(in *HookInput) error {
+func (r *Runner) PostToolUse(ctx context.Context, in *HookInput) error {
 	if in.ToolName == "" {
 		return nil
 	}
@@ -98,7 +99,7 @@ func (r *Runner) PostToolUse(in *HookInput) error {
 	// Classify the observation type
 	nodeType := classifyTool(in.ToolName)
 
-	_, err := r.eng.Remember(engine.RememberInput{
+	_, err := r.eng.Remember(ctx, engine.RememberInput{
 		Type:    nodeType,
 		Content: content,
 		Scope:   "project",
@@ -110,7 +111,7 @@ func (r *Runner) PostToolUse(in *HookInput) error {
 }
 
 // SessionEnd is called when a session ends. Compresses and stores summary.
-func (r *Runner) SessionEnd(in *HookInput) error {
+func (r *Runner) SessionEnd(ctx context.Context, in *HookInput) error {
 	sessionID := readSessionID(r.project)
 	if sessionID == "" {
 		return nil
@@ -118,7 +119,7 @@ func (r *Runner) SessionEnd(in *HookInput) error {
 
 	// Store summary as a decision/spec if provided
 	if in.Summary != "" {
-		_, _ = r.eng.Remember(engine.RememberInput{
+		_, _ = r.eng.Remember(ctx, engine.RememberInput{
 			Type:    "session",
 			Content: privacy.Filter(in.Summary),
 			Scope:   "project",
@@ -129,7 +130,7 @@ func (r *Runner) SessionEnd(in *HookInput) error {
 	}
 
 	// Compress session
-	_, err := r.eng.CompressSession(sessionID, r.project)
+	_, err := r.eng.CompressSession(ctx, sessionID, r.project)
 
 	// Clean up session file
 	_ = os.Remove(sessionFile(r.project))
@@ -186,7 +187,7 @@ func truncate(s string, n int) string {
 }
 
 // StoreToolEvent stores a raw tool event for session replay.
-func (r *Runner) StoreToolEvent(in *HookInput, store storage.Storage) error {
+func (r *Runner) StoreToolEvent(ctx context.Context, in *HookInput, store storage.Storage) error {
 	sessionID := readSessionID(r.project)
 	b, _ := json.Marshal(map[string]any{
 		"tool":    in.ToolName,
@@ -196,5 +197,5 @@ func (r *Runner) StoreToolEvent(in *HookInput, store storage.Storage) error {
 		"time":    time.Now().Unix(),
 		"session": sessionID,
 	})
-	return store.AddReplayEvent(sessionID, string(b))
+	return store.AddReplayEvent(ctx, sessionID, string(b))
 }

@@ -1,11 +1,19 @@
 package graph
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 
 	"github.com/GrayCodeAI/yaad/internal/intent"
 	"github.com/GrayCodeAI/yaad/internal/storage"
+)
+
+const (
+	defaultBFSDepth     = 2
+	defaultImpactDepth  = 3
+	defaultSubgraphDepth = 2
 )
 
 // Acyclic edge types — cycle detection enforced on insert.
@@ -22,16 +30,16 @@ func IsAcyclic(edgeType string) bool { return acyclicEdges[edgeType] }
 
 // Graph is the interface for all graph operations used by Engine.
 type Graph interface {
-	AddNode(n *storage.Node) error
-	AddEdge(e *storage.Edge) error
-	RemoveNode(id string) error
-	RemoveEdge(id string) error
-	ExtractSubgraph(startID string, maxDepth int) (*Subgraph, error)
-	BFS(startID string, maxDepth int) ([]string, error)
-	IntentBFS(startID string, maxDepth int, queryIntent intent.Intent) ([]string, error)
-	Impact(filePath string, maxDepth int) ([]string, error)
-	Ancestors(id string) ([]string, error)
-	Descendants(id string) ([]string, error)
+	AddNode(ctx context.Context, n *storage.Node) error
+	AddEdge(ctx context.Context, e *storage.Edge) error
+	RemoveNode(ctx context.Context, id string) error
+	RemoveEdge(ctx context.Context, id string) error
+	ExtractSubgraph(ctx context.Context, startID string, maxDepth int) (*Subgraph, error)
+	BFS(ctx context.Context, startID string, maxDepth int) ([]string, error)
+	IntentBFS(ctx context.Context, startID string, maxDepth int, queryIntent intent.Intent) ([]string, error)
+	Impact(ctx context.Context, filePath string, maxDepth int) ([]string, error)
+	Ancestors(ctx context.Context, id string) ([]string, error)
+	Descendants(ctx context.Context, id string) ([]string, error)
 }
 
 // Graph wraps a Store and provides DAG operations + traversal.
@@ -40,52 +48,37 @@ type graphImpl struct {
 	db    *sql.DB
 }
 
-// New creates a Graph engine backed by the given Store.
-func New(store storage.Storage) Graph {
-	return &graphImpl{store: store, db: store.DB()}
+// New creates a Graph engine backed by the given Store and raw DB connection.
+// The db handle is used for recursive CTE queries (BFS, cycle detection,
+// ancestors, descendants, impact) that cannot be expressed through the Storage
+// interface without leaking SQL details.
+func New(store storage.Storage, db *sql.DB) Graph {
+	return &graphImpl{store: store, db: db}
 }
 
 // AddNode delegates to store.
-func (g *graphImpl) AddNode(n *storage.Node) error { return g.store.CreateNode(n) }
+func (g *graphImpl) AddNode(ctx context.Context, n *storage.Node) error { return g.store.CreateNode(ctx, n) }
 
 // AddEdge creates an edge, enforcing cycle detection for acyclic types.
-func (g *graphImpl) AddEdge(e *storage.Edge) error {
+func (g *graphImpl) AddEdge(ctx context.Context, e *storage.Edge) error {
 	e.Acyclic = IsAcyclic(e.Type)
 	if e.Acyclic {
-		if err := g.checkCycle(e.FromID, e.ToID); err != nil {
+		hasCycle, err := g.store.CheckCycle(ctx, e.FromID, e.ToID)
+		if err != nil {
 			return err
 		}
+		if hasCycle {
+			return fmt.Errorf("cycle detected: adding edge %s → %s would create a cycle", e.FromID, e.ToID)
+		}
 	}
-	return g.store.CreateEdge(e)
+	return g.store.CreateEdge(ctx, e)
 }
 
 // RemoveNode delegates to store.
-func (g *graphImpl) RemoveNode(id string) error { return g.store.DeleteNode(id) }
+func (g *graphImpl) RemoveNode(ctx context.Context, id string) error { return g.store.DeleteNode(ctx, id) }
 
 // RemoveEdge delegates to store.
-func (g *graphImpl) RemoveEdge(id string) error { return g.store.DeleteEdge(id) }
-
-// checkCycle uses recursive CTE to detect if adding from→to would create a cycle
-// among acyclic edges. Returns error if cycle detected.
-func (g *graphImpl) checkCycle(fromID, toID string) error {
-	query := `
-		WITH RECURSIVE ancestors(id) AS (
-			SELECT ?
-			UNION ALL
-			SELECT e.from_id FROM ancestors a
-			JOIN edges e ON e.to_id = a.id AND e.acyclic = 1
-		)
-		SELECT 1 FROM ancestors WHERE id = ? LIMIT 1`
-	var exists int
-	err := g.db.QueryRow(query, fromID, toID).Scan(&exists)
-	if err == nil {
-		return fmt.Errorf("cycle detected: adding edge %s → %s would create a cycle", fromID, toID)
-	}
-	if err == sql.ErrNoRows {
-		return nil
-	}
-	return err
-}
+func (g *graphImpl) RemoveEdge(ctx context.Context, id string) error { return g.store.DeleteEdge(ctx, id) }
 
 // Subgraph holds a set of nodes and edges.
 type Subgraph struct {
@@ -94,7 +87,7 @@ type Subgraph struct {
 }
 
 // BFS performs breadth-first traversal from startID up to maxDepth, returning visited node IDs.
-func (g *graphImpl) BFS(startID string, maxDepth int) ([]string, error) {
+func (g *graphImpl) BFS(ctx context.Context, startID string, maxDepth int) ([]string, error) {
 	query := `
 		WITH RECURSIVE sg(id, depth) AS (
 			SELECT ?, 0
@@ -105,7 +98,7 @@ func (g *graphImpl) BFS(startID string, maxDepth int) ([]string, error) {
 			WHERE sg.depth < ?
 		)
 		SELECT DISTINCT id FROM sg`
-	rows, err := g.db.Query(query, startID, maxDepth)
+	rows, err := g.db.QueryContext(ctx, query, startID, maxDepth)
 	if err != nil {
 		return nil, err
 	}
@@ -122,8 +115,8 @@ func (g *graphImpl) BFS(startID string, maxDepth int) ([]string, error) {
 }
 
 // ExtractSubgraph returns the full subgraph (nodes + edges) around startID up to maxDepth.
-func (g *graphImpl) ExtractSubgraph(startID string, maxDepth int) (*Subgraph, error) {
-	ids, err := g.BFS(startID, maxDepth)
+func (g *graphImpl) ExtractSubgraph(ctx context.Context, startID string, maxDepth int) (*Subgraph, error) {
+	ids, err := g.BFS(ctx, startID, maxDepth)
 	if err != nil {
 		return nil, err
 	}
@@ -131,12 +124,9 @@ func (g *graphImpl) ExtractSubgraph(startID string, maxDepth int) (*Subgraph, er
 		return &Subgraph{}, nil
 	}
 	sg := &Subgraph{}
-	for _, id := range ids {
-		n, err := g.store.GetNode(id)
-		if err != nil {
-			continue // skip missing nodes
-		}
-		sg.Nodes = append(sg.Nodes, n)
+	nodes, err := g.store.GetNodesBatch(ctx, ids)
+	if err == nil {
+		sg.Nodes = nodes
 	}
 	// Collect edges between subgraph nodes
 	idSet := make(map[string]bool, len(ids))
@@ -144,7 +134,7 @@ func (g *graphImpl) ExtractSubgraph(startID string, maxDepth int) (*Subgraph, er
 		idSet[id] = true
 	}
 	for _, id := range ids {
-		edges, err := g.store.GetEdgesFrom(id)
+		edges, err := g.store.GetEdgesFrom(ctx, id)
 		if err != nil {
 			continue
 		}
@@ -158,7 +148,7 @@ func (g *graphImpl) ExtractSubgraph(startID string, maxDepth int) (*Subgraph, er
 }
 
 // Ancestors walks backwards through acyclic edges from the given node.
-func (g *graphImpl) Ancestors(id string) ([]string, error) {
+func (g *graphImpl) Ancestors(ctx context.Context, id string) ([]string, error) {
 	query := `
 		WITH RECURSIVE anc(id) AS (
 			SELECT ?
@@ -167,7 +157,7 @@ func (g *graphImpl) Ancestors(id string) ([]string, error) {
 			JOIN edges e ON e.to_id = a.id AND e.acyclic = 1
 		)
 		SELECT DISTINCT id FROM anc WHERE id != ?`
-	rows, err := g.db.Query(query, id, id)
+	rows, err := g.db.QueryContext(ctx, query, id, id)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +174,7 @@ func (g *graphImpl) Ancestors(id string) ([]string, error) {
 }
 
 // Descendants walks forward through acyclic edges from the given node.
-func (g *graphImpl) Descendants(id string) ([]string, error) {
+func (g *graphImpl) Descendants(ctx context.Context, id string) ([]string, error) {
 	query := `
 		WITH RECURSIVE desc(id) AS (
 			SELECT ?
@@ -193,7 +183,7 @@ func (g *graphImpl) Descendants(id string) ([]string, error) {
 			JOIN edges e ON e.from_id = d.id AND e.acyclic = 1
 		)
 		SELECT DISTINCT id FROM desc WHERE id != ?`
-	rows, err := g.db.Query(query, id, id)
+	rows, err := g.db.QueryContext(ctx, query, id, id)
 	if err != nil {
 		return nil, err
 	}
@@ -212,7 +202,7 @@ func (g *graphImpl) Descendants(id string) ([]string, error) {
 // IntentBFS performs intent-aware BFS from startID.
 // Edge traversal is weighted by the query intent (MAGMA-style adaptive traversal).
 // Edges with higher intent weight are traversed first and given higher scores.
-func (g *graphImpl) IntentBFS(startID string, maxDepth int, queryIntent intent.Intent) ([]string, error) {
+func (g *graphImpl) IntentBFS(ctx context.Context, startID string, maxDepth int, queryIntent intent.Intent) ([]string, error) {
 	weights := intent.Weights(queryIntent)
 
 	// Use a priority-aware BFS: score each neighbor by edge weight × semantic fit
@@ -237,11 +227,11 @@ func (g *graphImpl) IntentBFS(startID string, maxDepth int, queryIntent intent.I
 		}
 
 		// Get all edges from this node
-		edges, err := g.store.GetEdgesFrom(curr.id)
+		edges, err := g.store.GetEdgesFrom(ctx, curr.id)
 		if err != nil {
 			continue
 		}
-		edgesTo, err := g.store.GetEdgesTo(curr.id)
+		edgesTo, err := g.store.GetEdgesTo(ctx, curr.id)
 		if err != nil {
 			continue
 		}
@@ -266,12 +256,10 @@ func (g *graphImpl) IntentBFS(startID string, maxDepth int, queryIntent intent.I
 			neighbors = append(neighbors, scored{neighborID, score})
 		}
 
-		// Sort by score descending (simple insertion sort for small lists)
-		for i := 1; i < len(neighbors); i++ {
-			for j := i; j > 0 && neighbors[j].score > neighbors[j-1].score; j-- {
-				neighbors[j], neighbors[j-1] = neighbors[j-1], neighbors[j]
-			}
-		}
+		// Sort by score descending
+		sort.Slice(neighbors, func(i, j int) bool {
+			return neighbors[i].score > neighbors[j].score
+		})
 
 		for _, n := range neighbors {
 			if !visited[n.id] {
@@ -285,7 +273,7 @@ func (g *graphImpl) IntentBFS(startID string, maxDepth int, queryIntent intent.I
 }
 
 // Impact returns node IDs affected by a file change, walking backwards through the graph.
-func (g *graphImpl) Impact(filePath string, maxDepth int) ([]string, error) {
+func (g *graphImpl) Impact(ctx context.Context, filePath string, maxDepth int) ([]string, error) {
 	query := `
 		WITH RECURSIVE affected(id, depth) AS (
 			SELECT node_id, 0 FROM file_watch WHERE file_path = ?
@@ -296,7 +284,7 @@ func (g *graphImpl) Impact(filePath string, maxDepth int) ([]string, error) {
 			WHERE a.depth < ?
 		)
 		SELECT DISTINCT id FROM affected`
-	rows, err := g.db.Query(query, filePath, maxDepth)
+	rows, err := g.db.QueryContext(ctx, query, filePath, maxDepth)
 	if err != nil {
 		return nil, err
 	}

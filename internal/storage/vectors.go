@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"encoding/binary"
 	"math"
 )
@@ -27,8 +28,11 @@ func DecodeVector(b []byte) []float32 {
 }
 
 // SaveEmbedding stores a vector embedding for a node.
-func (s *Store) SaveEmbedding(nodeID, model string, vector []float32) error {
-	_, err := s.db.Exec(
+func (s *Store) SaveEmbedding(ctx context.Context, nodeID, model string, vector []float32) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO embeddings(node_id, vector, model) VALUES(?,?,?)
 		 ON CONFLICT(node_id) DO UPDATE SET vector=excluded.vector, model=excluded.model`,
 		nodeID, EncodeVector(vector), model)
@@ -36,10 +40,13 @@ func (s *Store) SaveEmbedding(nodeID, model string, vector []float32) error {
 }
 
 // GetEmbedding retrieves the embedding for a node.
-func (s *Store) GetEmbedding(nodeID string) ([]float32, string, error) {
+func (s *Store) GetEmbedding(ctx context.Context, nodeID string) ([]float32, string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
 	var blob []byte
 	var model string
-	err := s.db.QueryRow(`SELECT vector, model FROM embeddings WHERE node_id=?`, nodeID).Scan(&blob, &model)
+	err := s.db.QueryRowContext(ctx, `SELECT vector, model FROM embeddings WHERE node_id=?`, nodeID).Scan(&blob, &model)
 	if err != nil {
 		return nil, "", err
 	}
@@ -47,14 +54,20 @@ func (s *Store) GetEmbedding(nodeID string) ([]float32, string, error) {
 }
 
 // DeleteEmbedding removes a vector embedding for a node.
-func (s *Store) DeleteEmbedding(nodeID string) error {
-	_, err := s.db.Exec(`DELETE FROM embeddings WHERE node_id=?`, nodeID)
+func (s *Store) DeleteEmbedding(ctx context.Context, nodeID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM embeddings WHERE node_id=?`, nodeID)
 	return err
 }
 
 // GetEmbeddingsBatch returns a paginated batch of embeddings.
-func (s *Store) GetEmbeddingsBatch(offset, limit int) (map[string][]float32, error) {
-	rows, err := s.db.Query(`SELECT node_id, vector FROM embeddings LIMIT ? OFFSET ?`, limit, offset)
+func (s *Store) GetEmbeddingsBatch(ctx context.Context, offset, limit int) (map[string][]float32, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT node_id, vector FROM embeddings LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -72,8 +85,11 @@ func (s *Store) GetEmbeddingsBatch(offset, limit int) (map[string][]float32, err
 }
 
 // AllEmbeddings returns all stored embeddings as (nodeID, vector) pairs.
-func (s *Store) AllEmbeddings() (map[string][]float32, error) {
-	rows, err := s.db.Query(`SELECT node_id, vector FROM embeddings`)
+func (s *Store) AllEmbeddings(ctx context.Context) (map[string][]float32, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT node_id, vector FROM embeddings`)
 	if err != nil {
 		return nil, err
 	}

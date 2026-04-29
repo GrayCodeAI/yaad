@@ -2,6 +2,7 @@
 package exportimport
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -21,14 +22,14 @@ type GraphExport struct {
 }
 
 // ExportJSON exports the full graph as JSON.
-func ExportJSON(store storage.Storage, project string) ([]byte, error) {
-	nodes, err := store.ListNodes(storage.NodeFilter{Project: project})
+func ExportJSON(ctx context.Context, store storage.Storage, project string) ([]byte, error) {
+	nodes, err := store.ListNodes(ctx, storage.NodeFilter{Project: project})
 	if err != nil {
 		return nil, err
 	}
 	var edges []*storage.Edge
 	for _, n := range nodes {
-		e, _ := store.GetEdgesFrom(n.ID)
+		e, _ := store.GetEdgesFrom(ctx, n.ID)
 		edges = append(edges, e...)
 	}
 	return json.MarshalIndent(GraphExport{
@@ -40,19 +41,19 @@ func ExportJSON(store storage.Storage, project string) ([]byte, error) {
 }
 
 // ImportJSON imports a graph from JSON, skipping duplicates.
-func ImportJSON(store storage.Storage, data []byte) (int, int, error) {
+func ImportJSON(ctx context.Context, store storage.Storage, data []byte) (int, int, error) {
 	var exp GraphExport
 	if err := json.Unmarshal(data, &exp); err != nil {
 		return 0, 0, err
 	}
 	nodes, edges := 0, 0
 	for _, n := range exp.Nodes {
-		if err := store.CreateNode(n); err == nil {
+		if err := store.CreateNode(ctx, n); err == nil {
 			nodes++
 		}
 	}
 	for _, e := range exp.Edges {
-		if err := store.CreateEdge(e); err == nil {
+		if err := store.CreateEdge(ctx, e); err == nil {
 			edges++
 		}
 	}
@@ -60,8 +61,8 @@ func ImportJSON(store storage.Storage, data []byte) (int, int, error) {
 }
 
 // ExportMarkdown exports nodes as a Markdown document.
-func ExportMarkdown(store storage.Storage, project string) (string, error) {
-	nodes, err := store.ListNodes(storage.NodeFilter{Project: project})
+func ExportMarkdown(ctx context.Context, store storage.Storage, project string) (string, error) {
+	nodes, err := store.ListNodes(ctx, storage.NodeFilter{Project: project})
 	if err != nil {
 		return "", err
 	}
@@ -101,10 +102,10 @@ func ExportMarkdown(store storage.Storage, project string) (string, error) {
 }
 
 // ExportObsidian exports the graph as an Obsidian vault (one .md file per node, wikilinks for edges).
-func ExportObsidian(store storage.Storage, project, vaultDir string) (int, error) {
+func ExportObsidian(ctx context.Context, store storage.Storage, project, vaultDir string) (int, error) {
 	os.MkdirAll(vaultDir, 0755)
 
-	nodes, err := store.ListNodes(storage.NodeFilter{Project: project})
+	nodes, err := store.ListNodes(ctx, storage.NodeFilter{Project: project})
 	if err != nil {
 		return 0, err
 	}
@@ -117,7 +118,7 @@ func ExportObsidian(store storage.Storage, project, vaultDir string) (int, error
 
 	written := 0
 	for _, n := range nodes {
-		edges, _ := store.GetEdgesFrom(n.ID)
+		edges, _ := store.GetEdgesFrom(ctx, n.ID)
 		var sb strings.Builder
 
 		// Frontmatter

@@ -4,6 +4,7 @@
 package conflict
 
 import (
+	"context"
 	"strings"
 
 	"github.com/google/uuid"
@@ -22,9 +23,12 @@ func New(store storage.Storage) *Resolver {
 // CheckAndResolve checks if a new node contradicts existing nodes.
 // If a contradiction is found, creates a supersedes edge and lowers the old node's confidence.
 // Returns the list of superseded node IDs.
-func (r *Resolver) CheckAndResolve(newNode *storage.Node) ([]string, error) {
+func (r *Resolver) CheckAndResolve(ctx context.Context, newNode *storage.Node) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// Find existing nodes of the same type in the same project
-	existing, err := r.store.ListNodes(storage.NodeFilter{
+	existing, err := r.store.ListNodes(ctx, storage.NodeFilter{
 		Type:    newNode.Type,
 		Project: newNode.Project,
 		Scope:   newNode.Scope,
@@ -40,7 +44,7 @@ func (r *Resolver) CheckAndResolve(newNode *storage.Node) ([]string, error) {
 		}
 		if isContradiction(newNode, old) {
 			// Create supersedes edge
-			r.store.CreateEdge(&storage.Edge{
+			r.store.CreateEdge(ctx, &storage.Edge{
 				ID:      uuid.New().String(),
 				FromID:  newNode.ID,
 				ToID:    old.ID,
@@ -50,9 +54,9 @@ func (r *Resolver) CheckAndResolve(newNode *storage.Node) ([]string, error) {
 			})
 			// Lower old node confidence
 			old.Confidence *= 0.3
-			r.store.UpdateNode(old)
+			r.store.UpdateNode(ctx, old)
 			// Save version for audit trail
-			r.store.SaveVersion(old.ID, old.Content, "conflict-resolver",
+			r.store.SaveVersion(ctx, old.ID, old.Content, "conflict-resolver",
 				"superseded by "+newNode.ID[:8])
 			superseded = append(superseded, old.ID)
 		}

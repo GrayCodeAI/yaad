@@ -1,17 +1,19 @@
 package storage
 
+import "context"
+
 // UpsertByTopic updates an existing node if one with the same project+scope+topic_key exists,
 // otherwise creates a new one. Based on Engram's topic dedup approach.
 // topic_key is stored in the Tags field as "topic:<key>".
-func (s *Store) UpsertByTopic(n *Node, topicKey string) (*Node, bool, error) {
+func (s *Store) UpsertByTopic(ctx context.Context, n *Node, topicKey string) (*Node, bool, error) {
 	if topicKey == "" {
-		return nil, false, s.CreateNode(n)
+		return nil, false, s.CreateNode(ctx, n)
 	}
 
 	tag := "topic:" + topicKey
 
 	// Find existing node with same topic key in same project+scope
-	existing, err := s.ListNodes(NodeFilter{
+	existing, err := s.ListNodes(ctx, NodeFilter{
 		Project: n.Project,
 		Scope:   n.Scope,
 		Type:    n.Type,
@@ -23,12 +25,12 @@ func (s *Store) UpsertByTopic(n *Node, topicKey string) (*Node, bool, error) {
 	for _, e := range existing {
 		if containsTag(e.Tags, tag) {
 			// Update existing node
-			s.SaveVersion(e.ID, e.Content, "topic-upsert", "updated via topic key: "+topicKey)
+			s.SaveVersion(ctx, e.ID, e.Content, "topic-upsert", "updated via topic key: "+topicKey)
 			e.Content = n.Content
 			e.Summary = n.Summary
 			e.Version++
 			e.Confidence = n.Confidence
-			if err := s.UpdateNode(e); err != nil {
+			if err := s.UpdateNode(ctx, e); err != nil {
 				return nil, false, err
 			}
 			return e, true, nil // updated
@@ -41,7 +43,7 @@ func (s *Store) UpsertByTopic(n *Node, topicKey string) (*Node, bool, error) {
 	} else {
 		n.Tags = n.Tags + "," + tag
 	}
-	return n, false, s.CreateNode(n) // created
+	return n, false, s.CreateNode(ctx, n) // created
 }
 
 func containsTag(tags, tag string) bool {

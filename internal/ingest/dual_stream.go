@@ -10,7 +10,8 @@
 package ingest
 
 import (
-	"log"
+	"context"
+	"log/slog"
 	"sync"
 
 	"github.com/google/uuid"
@@ -54,9 +55,9 @@ func New(eng *engine.Engine) *DualStream {
 
 // Remember is the fast path: stores node + temporal edge synchronously, then
 // enqueues slow-path work (heuristic causal inference) asynchronously.
-func (ds *DualStream) Remember(in engine.RememberInput) (*storage.Node, error) {
+func (ds *DualStream) Remember(ctx context.Context, in engine.RememberInput) (*storage.Node, error) {
 	// Fast path: store node
-	node, err := ds.eng.Remember(in)
+	node, err := ds.eng.Remember(ctx, in)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +69,7 @@ func (ds *DualStream) Remember(in engine.RememberInput) (*storage.Node, error) {
 	ds.mu.Unlock()
 
 	if prevID != "" {
-		_ = ds.graph.AddEdge(&storage.Edge{
+		_ = ds.graph.AddEdge(ctx, &storage.Edge{
 			ID:     uuid.New().String(),
 			FromID: prevID,
 			ToID:   node.ID,
@@ -110,12 +111,13 @@ func (ds *DualStream) startWorker() {
 // No LLM calls — Yaad is a memory layer, not an LLM client.
 // The coding agent handles LLM; Yaad handles memory structure.
 func (ds *DualStream) slowPath(job SlowPathJob) {
-	node, err := job.Eng.Store().GetNode(job.NodeID)
+	ctx := context.Background()
+	node, err := job.Eng.Store().GetNode(ctx, job.NodeID)
 	if err != nil {
 		return
 	}
 
-	neighbors, err := job.Graph.BFS(job.NodeID, 2)
+	neighbors, err := job.Graph.BFS(ctx, job.NodeID, 2)
 	if err != nil || len(neighbors) < 2 {
 		return
 	}
@@ -124,34 +126,34 @@ func (ds *DualStream) slowPath(job SlowPathJob) {
 		if neighborID == job.NodeID {
 			continue
 		}
-		neighbor, err := job.Eng.Store().GetNode(neighborID)
+		neighbor, err := job.Eng.Store().GetNode(ctx, neighborID)
 		if err != nil {
 			continue
 		}
 		// decision → led_to → convention
 		if neighbor.Type == "decision" && node.Type == "convention" {
-			_ = job.Graph.AddEdge(&storage.Edge{
+			_ = job.Graph.AddEdge(ctx, &storage.Edge{
 				ID: uuid.New().String(), FromID: neighborID, ToID: job.NodeID,
 				Type: "led_to", Weight: 0.8,
 			})
 		}
 		// decision ← caused_by ← bug
 		if neighbor.Type == "decision" && node.Type == "bug" {
-			_ = job.Graph.AddEdge(&storage.Edge{
+			_ = job.Graph.AddEdge(ctx, &storage.Edge{
 				ID: uuid.New().String(), FromID: job.NodeID, ToID: neighborID,
 				Type: "caused_by", Weight: 0.7,
 			})
 		}
 		// convention → part_of → spec
 		if neighbor.Type == "spec" && node.Type == "convention" {
-			_ = job.Graph.AddEdge(&storage.Edge{
+			_ = job.Graph.AddEdge(ctx, &storage.Edge{
 				ID: uuid.New().String(), FromID: job.NodeID, ToID: neighborID,
 				Type: "part_of", Weight: 0.6,
 			})
 		}
 	}
 
-	log.Printf("[yaad:slow] processed node %s (%s)", utils.ShortID(job.NodeID), node.Type)
+	slog.Info("slow path processed node", "node_id", utils.ShortID(job.NodeID), "type", node.Type)
 }
 
 // Stop gracefully shuts down the slow-path worker.

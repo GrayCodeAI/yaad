@@ -4,6 +4,7 @@
 package team
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -19,8 +20,8 @@ type ShareInput struct {
 }
 
 // Share copies a project-scoped node into the team namespace (global scope + team_id tag).
-func Share(src storage.Storage, dst storage.Storage, in ShareInput) (*storage.Node, error) {
-	node, err := src.GetNode(in.NodeID)
+func Share(ctx context.Context, src storage.Storage, dst storage.Storage, in ShareInput) (*storage.Node, error) {
+	node, err := src.GetNode(ctx, in.NodeID)
 	if err != nil {
 		return nil, fmt.Errorf("node %s not found: %w", in.NodeID, err)
 	}
@@ -40,15 +41,15 @@ func Share(src storage.Storage, dst storage.Storage, in ShareInput) (*storage.No
 		SourceAgent: in.SharedBy,
 		Version:     1,
 	}
-	if err := dst.CreateNode(shared); err != nil {
+	if err := dst.CreateNode(ctx, shared); err != nil {
 		return nil, err
 	}
 	return shared, nil
 }
 
 // ListTeamMemories returns all memories for a given team_id from the global store.
-func ListTeamMemories(store storage.Storage, teamID string) ([]*storage.Node, error) {
-	all, err := store.ListNodes(storage.NodeFilter{Scope: "global"})
+func ListTeamMemories(ctx context.Context, store storage.Storage, teamID string) ([]*storage.Node, error) {
+	all, err := store.ListNodes(ctx, storage.NodeFilter{Scope: "global"})
 	if err != nil {
 		return nil, err
 	}
@@ -63,8 +64,8 @@ func ListTeamMemories(store storage.Storage, teamID string) ([]*storage.Node, er
 }
 
 // InjectTeamContext adds team memories to a recall result.
-func InjectTeamContext(eng *engine.Engine, teamStore *storage.Store, teamID, query string, limit int) ([]*storage.Node, error) {
-	teamNodes, err := ListTeamMemories(teamStore, teamID)
+func InjectTeamContext(ctx context.Context, eng *engine.Engine, teamStore *storage.Store, teamID, query string, limit int) ([]*storage.Node, error) {
+	teamNodes, err := ListTeamMemories(ctx, teamStore, teamID)
 	if err != nil {
 		return nil, err
 	}

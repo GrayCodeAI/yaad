@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"database/sql"
 	"sync"
 	"testing"
@@ -39,7 +40,10 @@ func newMockStorage() *mockStorage {
 	}
 }
 
-func (m *mockStorage) CreateNode(n *storage.Node) error {
+func (m *mockStorage) CreateNode(ctx context.Context, n *storage.Node) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	cp := *n
@@ -47,7 +51,10 @@ func (m *mockStorage) CreateNode(n *storage.Node) error {
 	return nil
 }
 
-func (m *mockStorage) GetNode(id string) (*storage.Node, error) {
+func (m *mockStorage) GetNode(ctx context.Context, id string) (*storage.Node, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if n, ok := m.nodes[id]; ok {
@@ -57,7 +64,26 @@ func (m *mockStorage) GetNode(id string) (*storage.Node, error) {
 	return nil, sql.ErrNoRows
 }
 
-func (m *mockStorage) UpdateNode(n *storage.Node) error {
+func (m *mockStorage) GetNodesBatch(ctx context.Context, ids []string) ([]*storage.Node, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []*storage.Node
+	for _, id := range ids {
+		if n, ok := m.nodes[id]; ok {
+			cp := *n
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+func (m *mockStorage) UpdateNode(ctx context.Context, n *storage.Node) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	cp := *n
@@ -65,14 +91,20 @@ func (m *mockStorage) UpdateNode(n *storage.Node) error {
 	return nil
 }
 
-func (m *mockStorage) DeleteNode(id string) error {
+func (m *mockStorage) DeleteNode(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.nodes, id)
 	return nil
 }
 
-func (m *mockStorage) ListNodes(f storage.NodeFilter) ([]*storage.Node, error) {
+func (m *mockStorage) ListNodes(ctx context.Context, f storage.NodeFilter) ([]*storage.Node, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var out []*storage.Node
@@ -99,7 +131,10 @@ func (m *mockStorage) ListNodes(f storage.NodeFilter) ([]*storage.Node, error) {
 	return out, nil
 }
 
-func (m *mockStorage) SearchNodes(query string, limit int) ([]*storage.Node, error) {
+func (m *mockStorage) SearchNodes(ctx context.Context, query string, limit int) ([]*storage.Node, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var out []*storage.Node
@@ -115,7 +150,10 @@ func (m *mockStorage) SearchNodes(query string, limit int) ([]*storage.Node, err
 	return out, nil
 }
 
-func (m *mockStorage) SearchNodeByHash(hash, scope, project string) (*storage.Node, error) {
+func (m *mockStorage) SearchNodeByHash(ctx context.Context, hash, scope, project string) (*storage.Node, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for _, n := range m.nodes {
@@ -127,7 +165,10 @@ func (m *mockStorage) SearchNodeByHash(hash, scope, project string) (*storage.No
 	return nil, sql.ErrNoRows
 }
 
-func (m *mockStorage) GetNeighbors(nodeID string) ([]*storage.Node, error) {
+func (m *mockStorage) GetNeighbors(ctx context.Context, nodeID string) ([]*storage.Node, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	seen := map[string]bool{}
@@ -153,14 +194,20 @@ func (m *mockStorage) GetNeighbors(nodeID string) ([]*storage.Node, error) {
 	return out, nil
 }
 
-func (m *mockStorage) CreateEdge(e *storage.Edge) error {
+func (m *mockStorage) CreateEdge(ctx context.Context, e *storage.Edge) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.edges[e.ID] = e
 	return nil
 }
 
-func (m *mockStorage) GetEdge(id string) (*storage.Edge, error) {
+func (m *mockStorage) GetEdge(ctx context.Context, id string) (*storage.Edge, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if e, ok := m.edges[id]; ok {
@@ -170,14 +217,20 @@ func (m *mockStorage) GetEdge(id string) (*storage.Edge, error) {
 	return nil, sql.ErrNoRows
 }
 
-func (m *mockStorage) DeleteEdge(id string) error {
+func (m *mockStorage) DeleteEdge(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.edges, id)
 	return nil
 }
 
-func (m *mockStorage) GetEdgesFrom(nodeID string) ([]*storage.Edge, error) {
+func (m *mockStorage) GetEdgesFrom(ctx context.Context, nodeID string) ([]*storage.Edge, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var out []*storage.Edge
@@ -190,7 +243,10 @@ func (m *mockStorage) GetEdgesFrom(nodeID string) ([]*storage.Edge, error) {
 	return out, nil
 }
 
-func (m *mockStorage) GetEdgesTo(nodeID string) ([]*storage.Edge, error) {
+func (m *mockStorage) GetEdgesTo(ctx context.Context, nodeID string) ([]*storage.Edge, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var out []*storage.Edge
@@ -203,14 +259,76 @@ func (m *mockStorage) GetEdgesTo(nodeID string) ([]*storage.Edge, error) {
 	return out, nil
 }
 
-func (m *mockStorage) CreateSession(sess *storage.Session) error {
+func (m *mockStorage) CountEdges(ctx context.Context, nodeID string) (inbound int, outbound int, err error) {
+	if err := ctx.Err(); err != nil {
+		return 0, 0, err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, e := range m.edges {
+		if e.FromID == nodeID {
+			outbound++
+		}
+		if e.ToID == nodeID {
+			inbound++
+		}
+	}
+	return inbound, outbound, nil
+}
+
+func (m *mockStorage) CountAllEdges(ctx context.Context) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.edges), nil
+}
+
+func (m *mockStorage) CheckCycle(ctx context.Context, fromID, toID string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	seen := map[string]bool{}
+	var walk func(id string) bool
+	walk = func(id string) bool {
+		if id == toID {
+			return true
+		}
+		if seen[id] {
+			return false
+		}
+		seen[id] = true
+		for _, e := range m.edges {
+			acyclic := e.Type == "caused_by" || e.Type == "led_to" || e.Type == "supersedes" ||
+				e.Type == "learned_in" || e.Type == "part_of"
+			if e.ToID == id && acyclic {
+				if walk(e.FromID) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return walk(fromID), nil
+}
+
+func (m *mockStorage) CreateSession(ctx context.Context, sess *storage.Session) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sessions[sess.ID] = sess
 	return nil
 }
 
-func (m *mockStorage) EndSession(id string, summary string) error {
+func (m *mockStorage) EndSession(ctx context.Context, id string, summary string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if s, ok := m.sessions[id]; ok {
@@ -220,7 +338,10 @@ func (m *mockStorage) EndSession(id string, summary string) error {
 	return nil
 }
 
-func (m *mockStorage) ListSessions(project string, limit int) ([]*storage.Session, error) {
+func (m *mockStorage) ListSessions(ctx context.Context, project string, limit int) ([]*storage.Session, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var out []*storage.Session
@@ -232,7 +353,10 @@ func (m *mockStorage) ListSessions(project string, limit int) ([]*storage.Sessio
 	return out, nil
 }
 
-func (m *mockStorage) SaveVersion(nodeID string, content, changedBy, reason string) error {
+func (m *mockStorage) SaveVersion(ctx context.Context, nodeID string, content, changedBy, reason string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	vers := m.versions[nodeID]
@@ -253,7 +377,10 @@ func (m *mockStorage) SaveVersion(nodeID string, content, changedBy, reason stri
 	return nil
 }
 
-func (m *mockStorage) GetVersions(nodeID string) ([]*storage.NodeVersion, error) {
+func (m *mockStorage) GetVersions(ctx context.Context, nodeID string) ([]*storage.NodeVersion, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := make([]*storage.NodeVersion, len(m.versions[nodeID]))
@@ -261,7 +388,10 @@ func (m *mockStorage) GetVersions(nodeID string) ([]*storage.NodeVersion, error)
 	return out, nil
 }
 
-func (m *mockStorage) SaveEmbedding(nodeID, model string, vector []float32) error {
+func (m *mockStorage) SaveEmbedding(ctx context.Context, nodeID, model string, vector []float32) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	cp := make([]float32, len(vector))
@@ -270,14 +400,20 @@ func (m *mockStorage) SaveEmbedding(nodeID, model string, vector []float32) erro
 	return nil
 }
 
-func (m *mockStorage) DeleteEmbedding(nodeID string) error {
+func (m *mockStorage) DeleteEmbedding(ctx context.Context, nodeID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.embeds, nodeID)
 	return nil
 }
 
-func (m *mockStorage) AllEmbeddings() (map[string][]float32, error) {
+func (m *mockStorage) AllEmbeddings(ctx context.Context) (map[string][]float32, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := make(map[string][]float32, len(m.embeds))
@@ -289,22 +425,27 @@ func (m *mockStorage) AllEmbeddings() (map[string][]float32, error) {
 	return out, nil
 }
 
-func (m *mockStorage) GetEmbeddingsBatch(offset, limit int) (map[string][]float32, error) {
-	return m.AllEmbeddings()
+func (m *mockStorage) GetEmbeddingsBatch(ctx context.Context, offset, limit int) (map[string][]float32, error) {
+	return m.AllEmbeddings(ctx)
 }
 
-func (m *mockStorage) AddFileWatch(filePath, nodeID, gitHash string) error {
+func (m *mockStorage) AddFileWatch(ctx context.Context, filePath, nodeID, gitHash string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.watches = append(m.watches, fileWatch{filePath, nodeID, gitHash})
 	return nil
 }
 
-func (m *mockStorage) AddReplayEvent(sessionID, data string) error { return nil }
-func (m *mockStorage) GetReplayEvents(sessionID string) ([]*storage.ReplayEvent, error) {
+func (m *mockStorage) AddReplayEvent(ctx context.Context, sessionID, data string) error { return nil }
+func (m *mockStorage) GetReplayEvents(ctx context.Context, sessionID string) ([]*storage.ReplayEvent, error) {
 	return nil, nil
 }
-func (m *mockStorage) DB() *sql.DB { return nil }
+func (m *mockStorage) WithTx(ctx context.Context, fn func(storage.Storage) error) error {
+	return fn(m)
+}
 func (m *mockStorage) Close() error { return nil }
 
 func contains(s, substr string) bool {
@@ -332,30 +473,30 @@ func newMockGraph(store storage.Storage) *mockGraph {
 	return &mockGraph{store: store}
 }
 
-func (g *mockGraph) AddNode(n *storage.Node) error {
-	return g.store.CreateNode(n)
+func (g *mockGraph) AddNode(ctx context.Context, n *storage.Node) error {
+	return g.store.CreateNode(ctx, n)
 }
 
-func (g *mockGraph) AddEdge(e *storage.Edge) error {
-	return g.store.CreateEdge(e)
+func (g *mockGraph) AddEdge(ctx context.Context, e *storage.Edge) error {
+	return g.store.CreateEdge(ctx, e)
 }
 
-func (g *mockGraph) RemoveNode(id string) error {
-	return g.store.DeleteNode(id)
+func (g *mockGraph) RemoveNode(ctx context.Context, id string) error {
+	return g.store.DeleteNode(ctx, id)
 }
 
-func (g *mockGraph) RemoveEdge(id string) error {
-	return g.store.DeleteEdge(id)
+func (g *mockGraph) RemoveEdge(ctx context.Context, id string) error {
+	return g.store.DeleteEdge(ctx, id)
 }
 
-func (g *mockGraph) ExtractSubgraph(startID string, maxDepth int) (*graph.Subgraph, error) {
-	ids, err := g.BFS(startID, maxDepth)
+func (g *mockGraph) ExtractSubgraph(ctx context.Context, startID string, maxDepth int) (*graph.Subgraph, error) {
+	ids, err := g.BFS(ctx, startID, maxDepth)
 	if err != nil {
 		return nil, err
 	}
 	sg := &graph.Subgraph{}
 	for _, id := range ids {
-		n, err := g.store.GetNode(id)
+		n, err := g.store.GetNode(ctx, id)
 		if err == nil {
 			sg.Nodes = append(sg.Nodes, n)
 		}
@@ -365,7 +506,7 @@ func (g *mockGraph) ExtractSubgraph(startID string, maxDepth int) (*graph.Subgra
 		idSet[id] = true
 	}
 	for _, id := range ids {
-		edges, _ := g.store.GetEdgesFrom(id)
+		edges, _ := g.store.GetEdgesFrom(ctx, id)
 		for _, e := range edges {
 			if idSet[e.ToID] {
 				sg.Edges = append(sg.Edges, e)
@@ -375,8 +516,8 @@ func (g *mockGraph) ExtractSubgraph(startID string, maxDepth int) (*graph.Subgra
 	return sg, nil
 }
 
-func (g *mockGraph) BFS(startID string, maxDepth int) ([]string, error) {
-	_, err := g.store.GetNode(startID)
+func (g *mockGraph) BFS(ctx context.Context, startID string, maxDepth int) ([]string, error) {
+	_, err := g.store.GetNode(ctx, startID)
 	if err != nil {
 		return nil, nil
 	}
@@ -394,8 +535,8 @@ func (g *mockGraph) BFS(startID string, maxDepth int) ([]string, error) {
 		if curr.depth >= maxDepth {
 			continue
 		}
-		edges, _ := g.store.GetEdgesFrom(curr.id)
-		edgesTo, _ := g.store.GetEdgesTo(curr.id)
+		edges, _ := g.store.GetEdgesFrom(ctx, curr.id)
+		edgesTo, _ := g.store.GetEdgesTo(ctx, curr.id)
 		allEdges := append(edges, edgesTo...)
 		for _, e := range allEdges {
 			var next string
@@ -417,20 +558,20 @@ func (g *mockGraph) BFS(startID string, maxDepth int) ([]string, error) {
 	return result, nil
 }
 
-func (g *mockGraph) IntentBFS(startID string, maxDepth int, queryIntent intent.Intent) ([]string, error) {
+func (g *mockGraph) IntentBFS(ctx context.Context, startID string, maxDepth int, queryIntent intent.Intent) ([]string, error) {
 	// For mock, delegate to plain BFS (intent weights are ignored)
-	return g.BFS(startID, maxDepth)
+	return g.BFS(ctx, startID, maxDepth)
 }
 
-func (g *mockGraph) Impact(filePath string, maxDepth int) ([]string, error) {
+func (g *mockGraph) Impact(ctx context.Context, filePath string, maxDepth int) ([]string, error) {
 	return nil, nil
 }
 
-func (g *mockGraph) Ancestors(id string) ([]string, error) {
+func (g *mockGraph) Ancestors(ctx context.Context, id string) ([]string, error) {
 	return nil, nil
 }
 
-func (g *mockGraph) Descendants(id string) ([]string, error) {
+func (g *mockGraph) Descendants(ctx context.Context, id string) ([]string, error) {
 	return nil, nil
 }
 
@@ -475,7 +616,7 @@ func TestEngineWithMocks(t *testing.T) {
 func TestRememberAndRecall(t *testing.T) {
 	eng := newTestEngine()
 
-	node, err := eng.Remember(RememberInput{
+	node, err := eng.Remember(context.Background(), RememberInput{
 		Type:    "convention",
 		Content: "Always use context.Context as first parameter",
 		Scope:   "project",
@@ -491,7 +632,7 @@ func TestRememberAndRecall(t *testing.T) {
 		t.Errorf("unexpected content: %s", node.Content)
 	}
 
-	res, err := eng.Recall(RecallOpts{Query: "context.Context", Project: "testproj"})
+	res, err := eng.Recall(context.Background(), RecallOpts{Query: "context.Context", Project: "testproj"})
 	if err != nil {
 		t.Fatalf("Recall failed: %v", err)
 	}
@@ -514,11 +655,11 @@ func TestRememberAndRecall(t *testing.T) {
 func TestRecallFilters(t *testing.T) {
 	eng := newTestEngine()
 
-	_, _ = eng.Remember(RememberInput{Type: "convention", Content: "conv1", Project: "p1"})
-	_, _ = eng.Remember(RememberInput{Type: "bug", Content: "bug1", Project: "p1"})
-	_, _ = eng.Remember(RememberInput{Type: "convention", Content: "conv2", Project: "p2"})
+	_, _ = eng.Remember(context.Background(), RememberInput{Type: "convention", Content: "conv1", Project: "p1"})
+	_, _ = eng.Remember(context.Background(), RememberInput{Type: "bug", Content: "bug1", Project: "p1"})
+	_, _ = eng.Remember(context.Background(), RememberInput{Type: "convention", Content: "conv2", Project: "p2"})
 
-	res, err := eng.Recall(RecallOpts{Query: "conv", Type: "convention", Project: "p1"})
+	res, err := eng.Recall(context.Background(), RecallOpts{Query: "conv", Type: "convention", Project: "p1"})
 	if err != nil {
 		t.Fatalf("Recall failed: %v", err)
 	}
@@ -534,13 +675,13 @@ func TestContext(t *testing.T) {
 	eng := newTestEngine()
 
 	// hot tier node
-	_, _ = eng.Remember(RememberInput{Type: "convention", Content: "hot memory", Project: "p1", Tier: 1})
+	_, _ = eng.Remember(context.Background(), RememberInput{Type: "convention", Content: "hot memory", Project: "p1", Tier: 1})
 	// active task
-	_, _ = eng.Remember(RememberInput{Type: "task", Content: "active task", Project: "p1"})
+	_, _ = eng.Remember(context.Background(), RememberInput{Type: "task", Content: "active task", Project: "p1"})
 	// irrelevant (different project)
-	_, _ = eng.Remember(RememberInput{Type: "convention", Content: "other project", Project: "p2", Tier: 1})
+	_, _ = eng.Remember(context.Background(), RememberInput{Type: "convention", Content: "other project", Project: "p2", Tier: 1})
 
-	ctx, err := eng.Context("p1")
+	ctx, err := eng.Context(context.Background(), "p1")
 	if err != nil {
 		t.Fatalf("Context failed: %v", err)
 	}
@@ -558,16 +699,16 @@ func TestContext(t *testing.T) {
 func TestForget(t *testing.T) {
 	eng := newTestEngine()
 
-	node, err := eng.Remember(RememberInput{Type: "decision", Content: "drop feature X", Project: "p1"})
+	node, err := eng.Remember(context.Background(), RememberInput{Type: "decision", Content: "drop feature X", Project: "p1"})
 	if err != nil {
 		t.Fatalf("Remember failed: %v", err)
 	}
 
-	if err := eng.Forget(node.ID); err != nil {
+	if err := eng.Forget(context.Background(), node.ID); err != nil {
 		t.Fatalf("Forget failed: %v", err)
 	}
 
-	got, err := eng.store.GetNode(node.ID)
+	got, err := eng.store.GetNode(context.Background(), node.ID)
 	if err != nil {
 		t.Fatalf("GetNode failed: %v", err)
 	}
@@ -580,11 +721,11 @@ func TestForget(t *testing.T) {
 func TestStatus(t *testing.T) {
 	eng := newTestEngine()
 
-	_, _ = eng.Remember(RememberInput{Type: "convention", Content: "c1", Project: "p1"})
-	_, _ = eng.Remember(RememberInput{Type: "convention", Content: "c2", Project: "p1"})
-	_, _ = eng.StartSession("p1", "agent-a")
+	_, _ = eng.Remember(context.Background(), RememberInput{Type: "convention", Content: "c1", Project: "p1"})
+	_, _ = eng.Remember(context.Background(), RememberInput{Type: "convention", Content: "c2", Project: "p1"})
+	_, _ = eng.StartSession(context.Background(), "p1", "agent-a")
 
-	st, err := eng.Status("p1")
+	st, err := eng.Status(context.Background(), "p1")
 	if err != nil {
 		t.Fatalf("Status failed: %v", err)
 	}
@@ -600,34 +741,34 @@ func TestStatus(t *testing.T) {
 func TestFeedback(t *testing.T) {
 	eng := newTestEngine()
 
-	node, err := eng.Remember(RememberInput{Type: "bug", Content: "old bug desc", Project: "p1"})
+	node, err := eng.Remember(context.Background(), RememberInput{Type: "bug", Content: "old bug desc", Project: "p1"})
 	if err != nil {
 		t.Fatalf("Remember failed: %v", err)
 	}
 
 	// Approve
-	if err := eng.Feedback(node.ID, FeedbackApprove, ""); err != nil {
+	if err := eng.Feedback(context.Background(), node.ID, FeedbackApprove, ""); err != nil {
 		t.Fatalf("Feedback approve failed: %v", err)
 	}
-	got, _ := eng.store.GetNode(node.ID)
+	got, _ := eng.store.GetNode(context.Background(), node.ID)
 	if got.Confidence != 1.0 {
 		t.Errorf("expected confidence 1.0 after approve, got %f", got.Confidence)
 	}
 
 	// Edit
-	if err := eng.Feedback(node.ID, FeedbackEdit, "new bug desc"); err != nil {
+	if err := eng.Feedback(context.Background(), node.ID, FeedbackEdit, "new bug desc"); err != nil {
 		t.Fatalf("Feedback edit failed: %v", err)
 	}
-	got, _ = eng.store.GetNode(node.ID)
+	got, _ = eng.store.GetNode(context.Background(), node.ID)
 	if got.Content != "new bug desc" {
 		t.Errorf("expected content 'new bug desc', got %s", got.Content)
 	}
 
 	// Discard
-	if err := eng.Feedback(node.ID, FeedbackDiscard, ""); err != nil {
+	if err := eng.Feedback(context.Background(), node.ID, FeedbackDiscard, ""); err != nil {
 		t.Fatalf("Feedback discard failed: %v", err)
 	}
-	got, _ = eng.store.GetNode(node.ID)
+	got, _ = eng.store.GetNode(context.Background(), node.ID)
 	if got.Confidence != 0 {
 		t.Errorf("expected confidence 0 after discard, got %f", got.Confidence)
 	}
@@ -637,22 +778,22 @@ func TestFeedback(t *testing.T) {
 func TestRollback(t *testing.T) {
 	eng := newTestEngine()
 
-	node, err := eng.Remember(RememberInput{Type: "decision", Content: "v1 content", Project: "p1"})
+	node, err := eng.Remember(context.Background(), RememberInput{Type: "decision", Content: "v1 content", Project: "p1"})
 	if err != nil {
 		t.Fatalf("Remember failed: %v", err)
 	}
 
 	// Save a version manually
-	_ = eng.store.SaveVersion(node.ID, "v1 content", "user", "saved")
+	_ = eng.store.SaveVersion(context.Background(), node.ID, "v1 content", "user", "saved")
 	// Edit to create v2
-	_ = eng.Feedback(node.ID, FeedbackEdit, "v2 content")
+	_ = eng.Feedback(context.Background(), node.ID, FeedbackEdit, "v2 content")
 
 	// Rollback to v1
-	if err := eng.Rollback(node.ID, 1); err != nil {
+	if err := eng.Rollback(context.Background(), node.ID, 1); err != nil {
 		t.Fatalf("Rollback failed: %v", err)
 	}
 
-	got, _ := eng.store.GetNode(node.ID)
+	got, _ := eng.store.GetNode(context.Background(), node.ID)
 	if got.Content != "v1 content" {
 		t.Errorf("expected content 'v1 content' after rollback, got %s", got.Content)
 	}
@@ -662,13 +803,13 @@ func TestRollback(t *testing.T) {
 func TestPendingNodes(t *testing.T) {
 	eng := newTestEngine()
 
-	node, _ := eng.Remember(RememberInput{Type: "convention", Content: "low confidence", Project: "p1"})
-	_ = eng.Feedback(node.ID, FeedbackDiscard, "")
+	node, _ := eng.Remember(context.Background(), RememberInput{Type: "convention", Content: "low confidence", Project: "p1"})
+	_ = eng.Feedback(context.Background(), node.ID, FeedbackDiscard, "")
 	// re-create with low confidence manually
 	node.Confidence = 0.3
-	_ = eng.store.UpdateNode(node)
+	_ = eng.store.UpdateNode(context.Background(), node)
 
-	pending, err := eng.PendingNodes("p1", 0.5)
+	pending, err := eng.PendingNodes(context.Background(), "p1", 0.5)
 	if err != nil {
 		t.Fatalf("PendingNodes failed: %v", err)
 	}
@@ -688,7 +829,7 @@ func TestPendingNodes(t *testing.T) {
 func TestEmptyDatabase(t *testing.T) {
 	eng := newTestEngine()
 
-	res, err := eng.Recall(RecallOpts{Query: "anything", Project: "empty"})
+	res, err := eng.Recall(context.Background(), RecallOpts{Query: "anything", Project: "empty"})
 	if err != nil {
 		t.Fatalf("Recall on empty DB failed: %v", err)
 	}
@@ -696,7 +837,7 @@ func TestEmptyDatabase(t *testing.T) {
 		t.Errorf("expected 0 nodes, got %d", len(res.Nodes))
 	}
 
-	ctx, err := eng.Context("empty")
+	ctx, err := eng.Context(context.Background(), "empty")
 	if err != nil {
 		t.Fatalf("Context on empty DB failed: %v", err)
 	}
@@ -704,7 +845,7 @@ func TestEmptyDatabase(t *testing.T) {
 		t.Errorf("expected 0 context nodes, got %d", len(ctx.Nodes))
 	}
 
-	st, err := eng.Status("empty")
+	st, err := eng.Status(context.Background(), "empty")
 	if err != nil {
 		t.Fatalf("Status on empty DB failed: %v", err)
 	}
@@ -717,11 +858,11 @@ func TestEmptyDatabase(t *testing.T) {
 func TestNonexistentNode(t *testing.T) {
 	eng := newTestEngine()
 
-	if err := eng.Forget("nonexistent-id"); err == nil {
+	if err := eng.Forget(context.Background(), "nonexistent-id"); err == nil {
 		t.Error("expected error forgetting nonexistent node")
 	}
 
-	_, err := eng.store.GetNode("nonexistent-id")
+	_, err := eng.store.GetNode(context.Background(), "nonexistent-id")
 	if err == nil {
 		t.Error("expected error getting nonexistent node")
 	}
@@ -736,7 +877,7 @@ func TestConcurrentRemember(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			_, err := eng.Remember(RememberInput{
+			_, err := eng.Remember(context.Background(), RememberInput{
 				Type:    "convention",
 				Content: "concurrent memory " + string(rune('a'+idx)),
 				Project: "concurrent-proj",
@@ -748,7 +889,7 @@ func TestConcurrentRemember(t *testing.T) {
 	}
 	wg.Wait()
 
-	st, err := eng.Status("concurrent-proj")
+	st, err := eng.Status(context.Background(), "concurrent-proj")
 	if err != nil {
 		t.Fatalf("Status failed: %v", err)
 	}
@@ -763,7 +904,7 @@ func TestConcurrentReadWrite(t *testing.T) {
 
 	// Seed some data
 	for i := 0; i < 10; i++ {
-		_, _ = eng.Remember(RememberInput{
+		_, _ = eng.Remember(context.Background(), RememberInput{
 			Type:    "convention",
 			Content: "seed memory " + string(rune('a'+i)),
 			Project: "rw-proj",
@@ -775,7 +916,7 @@ func TestConcurrentReadWrite(t *testing.T) {
 		wg.Add(2)
 		go func(idx int) {
 			defer wg.Done()
-			_, _ = eng.Remember(RememberInput{
+			_, _ = eng.Remember(context.Background(), RememberInput{
 				Type:    "convention",
 				Content: "writer memory " + string(rune('a'+idx)),
 				Project: "rw-proj",
@@ -783,7 +924,7 @@ func TestConcurrentReadWrite(t *testing.T) {
 		}(i)
 		go func() {
 			defer wg.Done()
-			_, _ = eng.Recall(RecallOpts{Query: "memory", Project: "rw-proj"})
+			_, _ = eng.Recall(context.Background(), RecallOpts{Query: "memory", Project: "rw-proj"})
 		}()
 	}
 	wg.Wait()
@@ -798,13 +939,13 @@ func TestRememberEmptyContent(t *testing.T) {
 		content string
 		wantErr bool
 	}{
-		{"empty content", "", false}, // empty content is allowed (filtered)
+		{"empty content", "", true}, // empty content is rejected
 		{"normal content", "valid content", false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			node, err := eng.Remember(RememberInput{
+			node, err := eng.Remember(context.Background(), RememberInput{
 				Type:    "convention",
 				Content: tc.content,
 				Project: "empty-test",
@@ -829,7 +970,7 @@ func TestRememberEmptyContent(t *testing.T) {
 func TestSessionFlow(t *testing.T) {
 	eng := newTestEngine()
 
-	sessID, err := eng.StartSession("p1", "agent-a")
+	sessID, err := eng.StartSession(context.Background(), "p1", "agent-a")
 	if err != nil {
 		t.Fatalf("StartSession failed: %v", err)
 	}
@@ -837,9 +978,9 @@ func TestSessionFlow(t *testing.T) {
 		t.Error("expected session ID")
 	}
 
-	_, _ = eng.Remember(RememberInput{Type: "convention", Content: "sess mem", Project: "p1", Session: sessID})
+	_, _ = eng.Remember(context.Background(), RememberInput{Type: "convention", Content: "sess mem", Project: "p1", Session: sessID})
 
-	summary, err := eng.CompressSession(sessID, "p1")
+	summary, err := eng.CompressSession(context.Background(), sessID, "p1")
 	if err != nil {
 		t.Fatalf("CompressSession failed: %v", err)
 	}

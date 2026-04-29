@@ -30,7 +30,7 @@ func openEngine() *engine.Engine {
 		fmt.Fprintf(os.Stderr, "error opening database: %v\n", err)
 		os.Exit(1)
 	}
-	return engine.New(store, graph.New(store))
+	return engine.New(store, graph.New(store, store.DB()))
 }
 
 // printJSON prints a value as indented JSON to stdout.

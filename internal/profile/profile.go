@@ -9,6 +9,7 @@
 package profile
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -27,12 +28,15 @@ type Profile struct {
 }
 
 // Build generates a profile from the memory graph. No LLM needed.
-func Build(store storage.Storage, project string) (*Profile, error) {
+func Build(ctx context.Context, store storage.Storage, project string) (*Profile, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	p := &Profile{Project: project}
 
 	// Static: high-confidence conventions, decisions, preferences
 	for _, typ := range []string{"convention", "decision", "preference"} {
-		nodes, _ := store.ListNodes(storage.NodeFilter{
+		nodes, _ := store.ListNodes(ctx, storage.NodeFilter{
 			Type: typ, Project: project, MinConfidence: 0.5,
 		})
 		for _, n := range nodes {
@@ -43,7 +47,7 @@ func Build(store storage.Storage, project string) (*Profile, error) {
 	// Dynamic: recent tasks, bugs, sessions (last 7 days)
 	cutoff := time.Now().AddDate(0, 0, -7)
 	for _, typ := range []string{"task", "bug", "session"} {
-		nodes, _ := store.ListNodes(storage.NodeFilter{
+		nodes, _ := store.ListNodes(ctx, storage.NodeFilter{
 			Type: typ, Project: project, MinConfidence: 0.1,
 		})
 		for _, n := range nodes {
@@ -57,7 +61,7 @@ func Build(store storage.Storage, project string) (*Profile, error) {
 	// Already in insertion order which is roughly chronological
 
 	// Stack: extract from entity nodes
-	entities, _ := store.ListNodes(storage.NodeFilter{
+	entities, _ := store.ListNodes(ctx, storage.NodeFilter{
 		Type: "entity", Project: project,
 	})
 	for _, n := range entities {

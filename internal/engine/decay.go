@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"math"
 	"time"
 
@@ -22,8 +23,11 @@ var DefaultDecayConfig = DecayConfig{
 
 // RunDecay applies half-life decay to all nodes in the store.
 // Orphan nodes (0 edges) and superseded nodes decay 2× faster.
-func RunDecay(store storage.Storage, cfg DecayConfig) error {
-	nodes, err := store.ListNodes(storage.NodeFilter{})
+func RunDecay(ctx context.Context, store storage.Storage, cfg DecayConfig) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	nodes, err := store.ListNodes(ctx, storage.NodeFilter{})
 	if err != nil {
 		return err
 	}
@@ -43,8 +47,8 @@ func RunDecay(store storage.Storage, cfg DecayConfig) error {
 
 		multiplier := 1.0
 		// Orphan nodes decay 2× faster
-		edges, _ := store.GetEdgesFrom(n.ID)
-		edgesTo, _ := store.GetEdgesTo(n.ID)
+		edges, _ := store.GetEdgesFrom(ctx, n.ID)
+		edgesTo, _ := store.GetEdgesTo(ctx, n.ID)
 		if len(edges)+len(edgesTo) == 0 {
 			multiplier = 2.0
 		}
@@ -61,7 +65,7 @@ func RunDecay(store storage.Storage, cfg DecayConfig) error {
 		// Half-life formula: confidence *= 0.5^(days / half_life * multiplier)
 		decay := math.Pow(0.5, days/cfg.HalfLifeDays*multiplier)
 		n.Confidence = math.Max(n.Confidence*decay, 0)
-		if err := store.UpdateNode(n); err != nil {
+		if err := store.UpdateNode(ctx, n); err != nil {
 			return err
 		}
 	}
@@ -69,8 +73,11 @@ func RunDecay(store storage.Storage, cfg DecayConfig) error {
 }
 
 // GarbageCollect removes nodes below min_confidence (except anchors: file/entity).
-func GarbageCollect(store storage.Storage, cfg DecayConfig) (int, error) {
-	nodes, err := store.ListNodes(storage.NodeFilter{})
+func GarbageCollect(ctx context.Context, store storage.Storage, cfg DecayConfig) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	nodes, err := store.ListNodes(ctx, storage.NodeFilter{})
 	if err != nil {
 		return 0, err
 	}
@@ -80,7 +87,7 @@ func GarbageCollect(store storage.Storage, cfg DecayConfig) (int, error) {
 			continue // keep anchors
 		}
 		if n.Confidence < cfg.MinConfidence {
-			if err := store.DeleteNode(n.ID); err == nil {
+			if err := store.DeleteNode(ctx, n.ID); err == nil {
 				removed++
 			}
 		}
@@ -89,13 +96,16 @@ func GarbageCollect(store storage.Storage, cfg DecayConfig) (int, error) {
 }
 
 // BoostNode increases confidence of a node on access (capped at 1.0).
-func BoostNode(store storage.Storage, id string, boost float64) error {
-	n, err := store.GetNode(id)
+func BoostNode(ctx context.Context, store storage.Storage, id string, boost float64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	n, err := store.GetNode(ctx, id)
 	if err != nil {
 		return err
 	}
 	n.Confidence = math.Min(n.Confidence+boost, 1.0)
 	n.AccessCount++
 	n.AccessedAt = time.Now()
-	return store.UpdateNode(n)
+	return store.UpdateNode(ctx, n)
 }

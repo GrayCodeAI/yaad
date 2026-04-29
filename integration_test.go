@@ -22,6 +22,7 @@ import (
 	"github.com/GrayCodeAI/yaad/internal/encrypt"
 	"github.com/GrayCodeAI/yaad/internal/engine"
 	"github.com/GrayCodeAI/yaad/internal/exportimport"
+	"github.com/GrayCodeAI/yaad/internal/graph"
 	"github.com/GrayCodeAI/yaad/internal/hooks"
 	"github.com/GrayCodeAI/yaad/internal/ingest"
 	intentpkg "github.com/GrayCodeAI/yaad/internal/intent"
@@ -44,7 +45,7 @@ func setup(t *testing.T) (*engine.Engine, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eng := engine.New(store)
+	eng := engine.New(store, graph.New(store))
 	return eng, func() { store.Close(); os.RemoveAll(dir) }
 }
 

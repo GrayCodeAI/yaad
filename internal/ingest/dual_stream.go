@@ -26,13 +26,13 @@ type SlowPathJob struct {
 	Content string
 	Project string
 	Eng     *engine.Engine
-	Graph   *graph.Graph
+	Graph   graph.Graph
 }
 
 // DualStream manages fast + slow path ingestion.
 type DualStream struct {
 	eng      *engine.Engine
-	graph    *graph.Graph
+	graph    graph.Graph
 	queue    chan SlowPathJob
 	wg       sync.WaitGroup
 	once     sync.Once

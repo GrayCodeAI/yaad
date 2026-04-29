@@ -18,13 +18,13 @@ type StaleReport struct {
 
 // Watcher detects stale memories by checking git history.
 type Watcher struct {
-	store *storage.Store
-	graph *graph.Graph
+	store storage.Storage
+	graph graph.Graph
 	dir   string
 }
 
 // New creates a git Watcher for the given project directory.
-func New(store *storage.Store, g *graph.Graph, dir string) *Watcher {
+func New(store storage.Storage, g graph.Graph, dir string) *Watcher {
 	return &Watcher{store: store, graph: g, dir: dir}
 }
 

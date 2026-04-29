@@ -16,6 +16,7 @@ package yaad
 
 import (
 	"github.com/GrayCodeAI/yaad/internal/engine"
+	"github.com/GrayCodeAI/yaad/internal/graph"
 	"github.com/GrayCodeAI/yaad/internal/mental"
 	"github.com/GrayCodeAI/yaad/internal/storage"
 )
@@ -56,7 +57,7 @@ func Open(dbPath string) (*Memory, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Memory{eng: engine.New(store), store: store}, nil
+	return &Memory{eng: engine.New(store, graph.New(store)), store: store}, nil
 }
 
 // Close closes the database connection.

@@ -20,22 +20,36 @@ var acyclicEdges = map[string]bool{
 // IsAcyclic returns true if the edge type enforces DAG constraint.
 func IsAcyclic(edgeType string) bool { return acyclicEdges[edgeType] }
 
+// Graph is the interface for all graph operations used by Engine.
+type Graph interface {
+	AddNode(n *storage.Node) error
+	AddEdge(e *storage.Edge) error
+	RemoveNode(id string) error
+	RemoveEdge(id string) error
+	ExtractSubgraph(startID string, maxDepth int) (*Subgraph, error)
+	BFS(startID string, maxDepth int) ([]string, error)
+	IntentBFS(startID string, maxDepth int, queryIntent intent.Intent) ([]string, error)
+	Impact(filePath string, maxDepth int) ([]string, error)
+	Ancestors(id string) ([]string, error)
+	Descendants(id string) ([]string, error)
+}
+
 // Graph wraps a Store and provides DAG operations + traversal.
-type Graph struct {
+type graphImpl struct {
 	store storage.Storage
 	db    *sql.DB
 }
 
 // New creates a Graph engine backed by the given Store.
-func New(store storage.Storage) *Graph {
-	return &Graph{store: store, db: store.DB()}
+func New(store storage.Storage) Graph {
+	return &graphImpl{store: store, db: store.DB()}
 }
 
 // AddNode delegates to store.
-func (g *Graph) AddNode(n *storage.Node) error { return g.store.CreateNode(n) }
+func (g *graphImpl) AddNode(n *storage.Node) error { return g.store.CreateNode(n) }
 
 // AddEdge creates an edge, enforcing cycle detection for acyclic types.
-func (g *Graph) AddEdge(e *storage.Edge) error {
+func (g *graphImpl) AddEdge(e *storage.Edge) error {
 	e.Acyclic = IsAcyclic(e.Type)
 	if e.Acyclic {
 		if err := g.checkCycle(e.FromID, e.ToID); err != nil {
@@ -46,14 +60,14 @@ func (g *Graph) AddEdge(e *storage.Edge) error {
 }
 
 // RemoveNode delegates to store.
-func (g *Graph) RemoveNode(id string) error { return g.store.DeleteNode(id) }
+func (g *graphImpl) RemoveNode(id string) error { return g.store.DeleteNode(id) }
 
 // RemoveEdge delegates to store.
-func (g *Graph) RemoveEdge(id string) error { return g.store.DeleteEdge(id) }
+func (g *graphImpl) RemoveEdge(id string) error { return g.store.DeleteEdge(id) }
 
 // checkCycle uses recursive CTE to detect if adding from→to would create a cycle
 // among acyclic edges. Returns error if cycle detected.
-func (g *Graph) checkCycle(fromID, toID string) error {
+func (g *graphImpl) checkCycle(fromID, toID string) error {
 	query := `
 		WITH RECURSIVE ancestors(id) AS (
 			SELECT ?
@@ -80,7 +94,7 @@ type Subgraph struct {
 }
 
 // BFS performs breadth-first traversal from startID up to maxDepth, returning visited node IDs.
-func (g *Graph) BFS(startID string, maxDepth int) ([]string, error) {
+func (g *graphImpl) BFS(startID string, maxDepth int) ([]string, error) {
 	query := `
 		WITH RECURSIVE sg(id, depth) AS (
 			SELECT ?, 0
@@ -108,7 +122,7 @@ func (g *Graph) BFS(startID string, maxDepth int) ([]string, error) {
 }
 
 // ExtractSubgraph returns the full subgraph (nodes + edges) around startID up to maxDepth.
-func (g *Graph) ExtractSubgraph(startID string, maxDepth int) (*Subgraph, error) {
+func (g *graphImpl) ExtractSubgraph(startID string, maxDepth int) (*Subgraph, error) {
 	ids, err := g.BFS(startID, maxDepth)
 	if err != nil {
 		return nil, err
@@ -144,7 +158,7 @@ func (g *Graph) ExtractSubgraph(startID string, maxDepth int) (*Subgraph, error)
 }
 
 // Ancestors walks backwards through acyclic edges from the given node.
-func (g *Graph) Ancestors(id string) ([]string, error) {
+func (g *graphImpl) Ancestors(id string) ([]string, error) {
 	query := `
 		WITH RECURSIVE anc(id) AS (
 			SELECT ?
@@ -170,7 +184,7 @@ func (g *Graph) Ancestors(id string) ([]string, error) {
 }
 
 // Descendants walks forward through acyclic edges from the given node.
-func (g *Graph) Descendants(id string) ([]string, error) {
+func (g *graphImpl) Descendants(id string) ([]string, error) {
 	query := `
 		WITH RECURSIVE desc(id) AS (
 			SELECT ?
@@ -198,7 +212,7 @@ func (g *Graph) Descendants(id string) ([]string, error) {
 // IntentBFS performs intent-aware BFS from startID.
 // Edge traversal is weighted by the query intent (MAGMA-style adaptive traversal).
 // Edges with higher intent weight are traversed first and given higher scores.
-func (g *Graph) IntentBFS(startID string, maxDepth int, queryIntent intent.Intent) ([]string, error) {
+func (g *graphImpl) IntentBFS(startID string, maxDepth int, queryIntent intent.Intent) ([]string, error) {
 	weights := intent.Weights(queryIntent)
 
 	// Use a priority-aware BFS: score each neighbor by edge weight × semantic fit
@@ -271,7 +285,7 @@ func (g *Graph) IntentBFS(startID string, maxDepth int, queryIntent intent.Inten
 }
 
 // Impact returns node IDs affected by a file change, walking backwards through the graph.
-func (g *Graph) Impact(filePath string, maxDepth int) ([]string, error) {
+func (g *graphImpl) Impact(filePath string, maxDepth int) ([]string, error) {
 	query := `
 		WITH RECURSIVE affected(id, depth) AS (
 			SELECT node_id, 0 FROM file_watch WHERE file_path = ?

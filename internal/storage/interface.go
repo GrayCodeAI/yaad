@@ -40,6 +40,9 @@ type Storage interface {
 	AddReplayEvent(sessionID, data string) error
 	GetReplayEvents(sessionID string) ([]*ReplayEvent, error)
 
+	// File watch (staleness tracking)
+	AddFileWatch(filePath, nodeID, gitHash string) error
+
 	// Raw DB access (for packages that need recursive CTEs)
 	DB() *sql.DB
 

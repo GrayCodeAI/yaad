@@ -154,6 +154,10 @@ func (m *mockStorage) GetEmbeddingsBatch(offset, limit int) (map[string][]float3
 	return nil, nil
 }
 
+func (m *mockStorage) AddFileWatch(filePath, nodeID, gitHash string) error {
+	return nil
+}
+
 func (m *mockStorage) AddReplayEvent(sessionID, data string) error {
 	return nil
 }

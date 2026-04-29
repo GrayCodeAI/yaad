@@ -1,0 +1,116 @@
+{
+  "verifiedAt": "2026-04-28T10:18:31Z",
+  "overall": "pass",
+  "dependencies": [
+    {
+      "name": "go",
+      "required": "1.25.5+",
+      "found": "go1.26.1 darwin/arm64",
+      "status": "available"
+    },
+    {
+      "name": "CGO_ENABLED=0 builds",
+      "required": "compiles without CGO",
+      "found": "CGO_ENABLED=0 go build ./... succeeded",
+      "status": "available"
+    },
+    {
+      "name": "make (build target)",
+      "required": "builds binary",
+      "found": "make build succeeded, produced yaad binary",
+      "status": "available"
+    },
+    {
+      "name": "go vet",
+      "required": "no issues",
+      "found": "go vet ./... passed cleanly",
+      "status": "available"
+    },
+    {
+      "name": "go test (unit + integration)",
+      "required": "all tests pass",
+      "found": "38 tests passed (go test -count=1 ./...)",
+      "status": "available"
+    },
+    {
+      "name": "race detector",
+      "required": "tests pass with -race flag",
+      "found": "go test -race -count=1 -v ./... — all 38 tests passed",
+      "status": "available"
+    },
+    {
+      "name": "github.com/BurntSushi/toml v1.5.0",
+      "required": "fetchable and usable",
+      "found": "successfully compiled and tested",
+      "status": "available"
+    },
+    {
+      "name": "github.com/charmbracelet/bubbles v1.0.0",
+      "required": "fetchable and usable",
+      "found": "successfully compiled and tested",
+      "status": "available"
+    },
+    {
+      "name": "github.com/charmbracelet/bubbletea v1.3.10",
+      "required": "fetchable and usable",
+      "found": "successfully compiled and tested",
+      "status": "available"
+    },
+    {
+      "name": "github.com/charmbracelet/lipgloss v1.1.0",
+      "required": "fetchable and usable",
+      "found": "successfully compiled and tested",
+      "status": "available"
+    },
+    {
+      "name": "github.com/google/uuid v1.6.0",
+      "required": "fetchable and usable",
+      "found": "successfully compiled and tested",
+      "status": "available"
+    },
+    {
+      "name": "github.com/mark3labs/mcp-go v0.49.0",
+      "required": "fetchable and usable",
+      "found": "successfully compiled and tested",
+      "status": "available"
+    },
+    {
+      "name": "github.com/spf13/cobra v1.9.1",
+      "required": "fetchable and usable",
+      "found": "successfully compiled and tested",
+      "status": "available"
+    },
+    {
+      "name": "google.golang.org/grpc v1.80.0",
+      "required": "fetchable and usable",
+      "found": "successfully compiled and tested",
+      "status": "available"
+    },
+    {
+      "name": "modernc.org/sqlite v1.50.0",
+      "required": "fetchable and usable",
+      "found": "successfully compiled and tested",
+      "status": "available"
+    },
+    {
+      "name": "port 3456 (REST API)",
+      "required": "in use by yaad",
+      "found": "yaad process (PID 17000, 23292) listening on vat (3456)",
+      "status": "available"
+    },
+    {
+      "name": "port 3457 (gRPC)",
+      "required": "in use by yaad",
+      "found": "yaad process (PID 17000, 23292) listening on vat-control (3457)",
+      "status": "available"
+    },
+    {
+      "name": "git",
+      "required": "installed and functional",
+      "found": "git 2.51.1, repo has history (latest commit d1fef15)",
+      "status": "available"
+    }
+  ],
+  "blockers": [],
+  "surprises": "Go version is 1.26.1 (exceeds the required 1.25.5+). All 38 tests passed including with -race flag. modernc.org/sqlite is used instead of github.com/mattn/go-sqlite3 (pure Go SQLite, no CGO dependency). The project also uses github.com/spf13/cobra and github.com/BurntSushi/toml which weren't in the original inventory list but are direct dependencies."
+}

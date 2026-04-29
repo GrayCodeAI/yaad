@@ -15,12 +15,12 @@ const rrfK = 60 // RRF constant
 // HybridSearch performs 3-stage retrieval: BM25 → vector → graph expansion → RRF fusion.
 type HybridSearch struct {
 	store    storage.Storage
-	graph    *graph.Graph
+	graph    graph.Graph
 	provider embeddings.Provider // nil = BM25 only
 }
 
 // NewHybridSearch creates a hybrid search engine.
-func NewHybridSearch(store storage.Storage, g *graph.Graph, provider embeddings.Provider) *HybridSearch {
+func NewHybridSearch(store storage.Storage, g graph.Graph, provider embeddings.Provider) *HybridSearch {
 	return &HybridSearch{store: store, graph: g, provider: provider}
 }
 

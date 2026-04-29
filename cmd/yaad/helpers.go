@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/GrayCodeAI/yaad/internal/engine"
+	"github.com/GrayCodeAI/yaad/internal/graph"
 	"github.com/GrayCodeAI/yaad/internal/storage"
 )
 
@@ -29,7 +30,7 @@ func openEngine() *engine.Engine {
 		fmt.Fprintf(os.Stderr, "error opening database: %v\n", err)
 		os.Exit(1)
 	}
-	return engine.New(store)
+	return engine.New(store, graph.New(store))
 }
 
 // printJSON prints a value as indented JSON to stdout.

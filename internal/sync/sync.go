@@ -47,12 +47,12 @@ type ChunkRecord struct {
 
 // Syncer manages chunk-based sync.
 type Syncer struct {
-	store   *storage.Store
+	store   storage.Storage
 	syncDir string // <project>/.yaad
 }
 
 // New creates a Syncer for the given project directory.
-func New(store *storage.Store, projectDir string) *Syncer {
+func New(store storage.Storage, projectDir string) *Syncer {
 	return &Syncer{store: store, syncDir: filepath.Join(projectDir, ".yaad")}
 }
 

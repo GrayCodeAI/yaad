@@ -28,7 +28,7 @@ type Model struct {
 
 // Generate creates a mental model from the current memory graph.
 // No LLM needed — built from high-confidence nodes.
-func Generate(store *storage.Store, project string) (*Model, error) {
+func Generate(store storage.Storage, project string) (*Model, error) {
 	m := &Model{Project: project}
 
 	// Conventions (hot tier, high confidence)

@@ -98,7 +98,7 @@ func importFile(eng *engine.Engine, path, project string) (int, error) {
 }
 
 // Export writes hot-tier convention nodes back to CLAUDE.md.
-func Export(store *storage.Store, dir, project string) error {
+func Export(store storage.Storage, dir, project string) error {
 	nodes, err := store.ListNodes(storage.NodeFilter{
 		Type: "convention", Project: project, Tier: 1,
 	})

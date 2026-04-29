@@ -12,11 +12,11 @@ import (
 
 // Compactor summarizes old, low-confidence memories to keep the graph lean.
 type Compactor struct {
-	store     *storage.Store
+	store     storage.Storage
 	maxTokens int // max total tokens before compaction triggers
 }
 
-func New(store *storage.Store, maxTokens int) *Compactor {
+func New(store storage.Storage, maxTokens int) *Compactor {
 	if maxTokens <= 0 {
 		maxTokens = 50000 // ~200KB of content
 	}

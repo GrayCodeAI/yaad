@@ -1056,7 +1056,7 @@ func TestMultiProject(t *testing.T) {
 	eng2.Remember(engine.RememberInput{Type: "convention", Content: "Use PostgreSQL for DB", Scope: "project", Project: "proj2"})
 
 	// Cross-project search
-	stores := []*storage.Store{eng1.Store(), eng2.Store()}
+	stores := []storage.Storage{eng1.Store(), eng2.Store()}
 	results, err := multiproject.CrossProjectSearch(stores, "jose", 5)
 	if err != nil {
 		t.Fatal(err)

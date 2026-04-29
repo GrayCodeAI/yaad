@@ -8,7 +8,7 @@ import (
 )
 
 // Rerank re-scores nodes combining RRF score, graph centrality, recency, and confidence.
-func Rerank(nodes []*ScoredNode, store *storage.Store) []*ScoredNode {
+func Rerank(nodes []*ScoredNode, store storage.Storage) []*ScoredNode {
 	now := time.Now()
 	for _, sn := range nodes {
 		sn.Score = combinedScore(sn, store, now)
@@ -19,7 +19,7 @@ func Rerank(nodes []*ScoredNode, store *storage.Store) []*ScoredNode {
 	return nodes
 }
 
-func combinedScore(sn *ScoredNode, store *storage.Store, now time.Time) float64 {
+func combinedScore(sn *ScoredNode, store storage.Storage, now time.Time) float64 {
 	n := sn.Node
 
 	// Centrality: count inbound edges (more connections = more important)

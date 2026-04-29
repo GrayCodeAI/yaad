@@ -19,7 +19,7 @@ type ShareInput struct {
 }
 
 // Share copies a project-scoped node into the team namespace (global scope + team_id tag).
-func Share(src *storage.Store, dst *storage.Store, in ShareInput) (*storage.Node, error) {
+func Share(src storage.Storage, dst storage.Storage, in ShareInput) (*storage.Node, error) {
 	node, err := src.GetNode(in.NodeID)
 	if err != nil {
 		return nil, fmt.Errorf("node %s not found: %w", in.NodeID, err)
@@ -47,7 +47,7 @@ func Share(src *storage.Store, dst *storage.Store, in ShareInput) (*storage.Node
 }
 
 // ListTeamMemories returns all memories for a given team_id from the global store.
-func ListTeamMemories(store *storage.Store, teamID string) ([]*storage.Node, error) {
+func ListTeamMemories(store storage.Storage, teamID string) ([]*storage.Node, error) {
 	all, err := store.ListNodes(storage.NodeFilter{Scope: "global"})
 	if err != nil {
 		return nil, err

@@ -45,7 +45,7 @@ func Store(eng *engine.Engine, s *Skill, project string) (*storage.Node, error) 
 }
 
 // Load retrieves a skill by name from the memory graph.
-func Load(store *storage.Store, name, project string) (*Skill, error) {
+func Load(store storage.Storage, name, project string) (*Skill, error) {
 	nodes, err := store.SearchNodes("Skill: "+name, 5)
 	if err != nil {
 		return nil, err
@@ -59,7 +59,7 @@ func Load(store *storage.Store, name, project string) (*Skill, error) {
 }
 
 // ListSkills returns all skill nodes for a project.
-func ListSkills(store *storage.Store, project string) ([]*Skill, error) {
+func ListSkills(store storage.Storage, project string) ([]*Skill, error) {
 	nodes, err := store.ListNodes(storage.NodeFilter{Type: "skill", Project: project})
 	if err != nil {
 		return nil, err

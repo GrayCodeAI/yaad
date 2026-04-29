@@ -46,6 +46,31 @@ func (s *Store) GetEmbedding(nodeID string) ([]float32, string, error) {
 	return DecodeVector(blob), model, nil
 }
 
+// DeleteEmbedding removes a vector embedding for a node.
+func (s *Store) DeleteEmbedding(nodeID string) error {
+	_, err := s.db.Exec(`DELETE FROM embeddings WHERE node_id=?`, nodeID)
+	return err
+}
+
+// GetEmbeddingsBatch returns a paginated batch of embeddings.
+func (s *Store) GetEmbeddingsBatch(offset, limit int) (map[string][]float32, error) {
+	rows, err := s.db.Query(`SELECT node_id, vector FROM embeddings LIMIT ? OFFSET ?`, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := map[string][]float32{}
+	for rows.Next() {
+		var nodeID string
+		var blob []byte
+		if err := rows.Scan(&nodeID, &blob); err != nil {
+			return nil, err
+		}
+		result[nodeID] = DecodeVector(blob)
+	}
+	return result, rows.Err()
+}
+
 // AllEmbeddings returns all stored embeddings as (nodeID, vector) pairs.
 func (s *Store) AllEmbeddings() (map[string][]float32, error) {
 	rows, err := s.db.Query(`SELECT node_id, vector FROM embeddings`)

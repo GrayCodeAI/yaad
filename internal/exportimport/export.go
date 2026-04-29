@@ -21,7 +21,7 @@ type GraphExport struct {
 }
 
 // ExportJSON exports the full graph as JSON.
-func ExportJSON(store *storage.Store, project string) ([]byte, error) {
+func ExportJSON(store storage.Storage, project string) ([]byte, error) {
 	nodes, err := store.ListNodes(storage.NodeFilter{Project: project})
 	if err != nil {
 		return nil, err
@@ -40,7 +40,7 @@ func ExportJSON(store *storage.Store, project string) ([]byte, error) {
 }
 
 // ImportJSON imports a graph from JSON, skipping duplicates.
-func ImportJSON(store *storage.Store, data []byte) (int, int, error) {
+func ImportJSON(store storage.Storage, data []byte) (int, int, error) {
 	var exp GraphExport
 	if err := json.Unmarshal(data, &exp); err != nil {
 		return 0, 0, err
@@ -60,7 +60,7 @@ func ImportJSON(store *storage.Store, data []byte) (int, int, error) {
 }
 
 // ExportMarkdown exports nodes as a Markdown document.
-func ExportMarkdown(store *storage.Store, project string) (string, error) {
+func ExportMarkdown(store storage.Storage, project string) (string, error) {
 	nodes, err := store.ListNodes(storage.NodeFilter{Project: project})
 	if err != nil {
 		return "", err
@@ -101,7 +101,7 @@ func ExportMarkdown(store *storage.Store, project string) (string, error) {
 }
 
 // ExportObsidian exports the graph as an Obsidian vault (one .md file per node, wikilinks for edges).
-func ExportObsidian(store *storage.Store, project, vaultDir string) (int, error) {
+func ExportObsidian(store storage.Storage, project, vaultDir string) (int, error) {
 	os.MkdirAll(vaultDir, 0755)
 
 	nodes, err := store.ListNodes(storage.NodeFilter{Project: project})

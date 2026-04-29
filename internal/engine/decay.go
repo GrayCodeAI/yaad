@@ -22,7 +22,7 @@ var DefaultDecayConfig = DecayConfig{
 
 // RunDecay applies half-life decay to all nodes in the store.
 // Orphan nodes (0 edges) and superseded nodes decay 2× faster.
-func RunDecay(store *storage.Store, cfg DecayConfig) error {
+func RunDecay(store storage.Storage, cfg DecayConfig) error {
 	nodes, err := store.ListNodes(storage.NodeFilter{})
 	if err != nil {
 		return err
@@ -69,7 +69,7 @@ func RunDecay(store *storage.Store, cfg DecayConfig) error {
 }
 
 // GarbageCollect removes nodes below min_confidence (except anchors: file/entity).
-func GarbageCollect(store *storage.Store, cfg DecayConfig) (int, error) {
+func GarbageCollect(store storage.Storage, cfg DecayConfig) (int, error) {
 	nodes, err := store.ListNodes(storage.NodeFilter{})
 	if err != nil {
 		return 0, err
@@ -89,7 +89,7 @@ func GarbageCollect(store *storage.Store, cfg DecayConfig) (int, error) {
 }
 
 // BoostNode increases confidence of a node on access (capped at 1.0).
-func BoostNode(store *storage.Store, id string, boost float64) error {
+func BoostNode(store storage.Storage, id string, boost float64) error {
 	n, err := store.GetNode(id)
 	if err != nil {
 		return err

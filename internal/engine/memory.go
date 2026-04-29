@@ -21,7 +21,7 @@ import (
 
 // Engine is the core memory engine wrapping graph + storage.
 type Engine struct {
-	store    *storage.Store
+	store    storage.Storage
 	graph    *graph.Graph
 	dedup    *dedup.Window
 	temporal *temporal.Backbone
@@ -29,7 +29,7 @@ type Engine struct {
 }
 
 // New creates a memory engine.
-func New(store *storage.Store) *Engine {
+func New(store storage.Storage) *Engine {
 	return &Engine{
 		store:    store,
 		graph:    graph.New(store),
@@ -43,7 +43,7 @@ func New(store *storage.Store) *Engine {
 func (e *Engine) Graph() *graph.Graph { return e.graph }
 
 // Store returns the underlying store.
-func (e *Engine) Store() *storage.Store { return e.store }
+func (e *Engine) Store() storage.Storage { return e.store }
 
 // RememberInput is the input for creating a memory node.
 type RememberInput struct {

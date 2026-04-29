@@ -186,7 +186,7 @@ func truncate(s string, n int) string {
 }
 
 // StoreToolEvent stores a raw tool event for session replay.
-func (r *Runner) StoreToolEvent(in *HookInput, store *storage.Store) error {
+func (r *Runner) StoreToolEvent(in *HookInput, store storage.Storage) error {
 	sessionID := readSessionID(r.project)
 	b, _ := json.Marshal(map[string]any{
 		"tool":    in.ToolName,

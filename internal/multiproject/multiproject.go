@@ -44,7 +44,7 @@ func ResolveGlobalEntity(globalStore *storage.Store, name, entityType string) (*
 }
 
 // CrossProjectSearch searches for nodes matching a query across multiple stores.
-func CrossProjectSearch(stores []*storage.Store, query string, limit int) ([]*storage.Node, error) {
+func CrossProjectSearch(stores []storage.Storage, query string, limit int) ([]*storage.Node, error) {
 	var all []*storage.Node
 	for _, store := range stores {
 		nodes, err := store.SearchNodes(query, limit)

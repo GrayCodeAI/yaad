@@ -22,12 +22,12 @@ func IsAcyclic(edgeType string) bool { return acyclicEdges[edgeType] }
 
 // Graph wraps a Store and provides DAG operations + traversal.
 type Graph struct {
-	store *storage.Store
+	store storage.Storage
 	db    *sql.DB
 }
 
 // New creates a Graph engine backed by the given Store.
-func New(store *storage.Store) *Graph {
+func New(store storage.Storage) *Graph {
 	return &Graph{store: store, db: store.DB()}
 }
 

@@ -27,7 +27,7 @@ type Profile struct {
 }
 
 // Build generates a profile from the memory graph. No LLM needed.
-func Build(store *storage.Store, project string) (*Profile, error) {
+func Build(store storage.Storage, project string) (*Profile, error) {
 	p := &Profile{Project: project}
 
 	// Static: high-confidence conventions, decisions, preferences

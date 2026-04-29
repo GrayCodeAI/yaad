@@ -12,10 +12,10 @@ import (
 
 // Resolver detects and resolves memory conflicts.
 type Resolver struct {
-	store *storage.Store
+	store storage.Storage
 }
 
-func New(store *storage.Store) *Resolver {
+func New(store storage.Storage) *Resolver {
 	return &Resolver{store: store}
 }
 

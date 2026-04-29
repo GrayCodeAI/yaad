@@ -17,12 +17,12 @@ import (
 
 // Backbone maintains the immutable temporal chain per project.
 type Backbone struct {
-	store    *storage.Store
+	store    storage.Storage
 	lastNode map[string]string // project → last node ID
 	mu       sync.Mutex
 }
 
-func New(store *storage.Store) *Backbone {
+func New(store storage.Storage) *Backbone {
 	return &Backbone{store: store, lastNode: map[string]string{}}
 }
 

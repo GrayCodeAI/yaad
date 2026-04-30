@@ -4,8 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
-	"log/slog"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -48,6 +48,11 @@ var validNodeTypes = map[string]bool{
 	"session":    true,
 }
 
+// IsValidNodeType reports whether typ is a recognized node type.
+func IsValidNodeType(typ string) bool {
+	return validNodeTypes[typ]
+}
+
 // Metrics tracks basic engine operation counters.
 type Metrics struct {
 	Remembers   int64
@@ -58,12 +63,14 @@ type Metrics struct {
 
 // Engine is the core memory engine wrapping graph + storage.
 type Engine struct {
-	store    storage.Storage
-	graph    graph.Graph
-	dedup    *dedup.Window
-	temporal *temporal.Backbone
-	conflict *conflict.Resolver
-	metrics  Metrics
+	store     storage.Storage
+	graph     graph.Graph
+	dedup     *dedup.Window
+	temporal  *temporal.Backbone
+	conflict  *conflict.Resolver
+	access    *AccessTracker
+	metrics   Metrics
+	mu        sync.Mutex // serializes writes (Remember, Forget, Feedback, etc.)
 }
 
 // New creates a memory engine.
@@ -74,6 +81,15 @@ func New(store storage.Storage, g graph.Graph) *Engine {
 		dedup:    dedup.New(5 * time.Minute),
 		temporal: temporal.New(store),
 		conflict: conflict.New(store),
+		access:   NewAccessTracker(store, 30*time.Second),
+	}
+}
+
+// Close shuts down the engine and its background workers.
+func (e *Engine) Close() {
+	if e.access != nil {
+		e.access.Stop()
+		e.access.Flush(context.Background())
 	}
 }
 
@@ -129,6 +145,8 @@ func (e *Engine) Remember(ctx context.Context, in RememberInput) (*storage.Node,
 		atomic.AddInt64(&e.metrics.Errors, 1)
 		return nil, err
 	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
 
 	// 1. Privacy filter
 	content := privacy.Filter(in.Content)
@@ -192,13 +210,16 @@ func (e *Engine) Remember(ctx context.Context, in RememberInput) (*storage.Node,
 	for _, ent := range entities {
 		entNode := e.getOrCreateAnchor(ctx, ent.Name, ent.Type, in.Scope, in.Project)
 		if entNode != nil {
-			_ = e.graph.AddEdge(ctx, &storage.Edge{
+			if err := e.graph.AddEdge(ctx, &storage.Edge{
 				ID:     uuid.New().String(),
 				FromID: node.ID,
 				ToID:   entNode.ID,
 				Type:   "touches",
 				Weight: 1.0,
-			})
+			}); err != nil {
+				// Entity edge is best-effort; don't fail Remember
+				continue
+			}
 		}
 	}
 
@@ -298,12 +319,8 @@ func (e *Engine) Recall(ctx context.Context, opts RecallOpts) (*RecallResult, er
 	// Stage 3: Rank by confidence × recency
 	nodes := make([]*storage.Node, 0, len(nodeMap))
 	for _, n := range nodeMap {
-		// Boost access (best-effort — don't fail recall if update fails)
-		n.AccessCount++
-		n.AccessedAt = time.Now()
-		if err := e.store.UpdateNode(ctx, n); err != nil {
-			slog.Warn("recall: failed to boost access count", "node_id", n.ID, "error", err)
-		}
+		// Log access via lightweight INSERT (batched flush) instead of UPDATE churn
+		e.access.Log(ctx, n.ID)
 		nodes = append(nodes, n)
 	}
 	sortByScore(nodes)
@@ -336,7 +353,7 @@ func (e *Engine) Context(ctx context.Context, project string) (*RecallResult, er
 		Tier: 1, Project: project, MinConfidence: 0.3,
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load hot tier: %w", err)
 	}
 
 	// Load active tasks
@@ -344,7 +361,7 @@ func (e *Engine) Context(ctx context.Context, project string) (*RecallResult, er
 		Type: "task", Project: project, MinConfidence: 0.1,
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load tasks: %w", err)
 	}
 
 	// Merge, dedup
@@ -370,6 +387,8 @@ func (e *Engine) Forget(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	node, err := e.store.GetNode(ctx, id)
 	if err != nil {
 		return err
@@ -420,11 +439,11 @@ func (e *Engine) Status(ctx context.Context, project string) (*Status, error) {
 	}
 	nodes, err := e.store.ListNodes(ctx, storage.NodeFilter{Project: project})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list nodes: %w", err)
 	}
 	sessions, err := e.store.ListSessions(ctx, project, 1000)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list sessions: %w", err)
 	}
 	// Count total edges with a single query instead of N+1
 	edgeCount, _ := e.store.CountAllEdges(ctx)

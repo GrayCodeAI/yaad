@@ -17,6 +17,17 @@ const (
 )
 
 // Acyclic edge types — cycle detection enforced on insert.
+var validEdgeTypes = map[string]bool{
+	"caused_by":  true,
+	"led_to":     true,
+	"supersedes": true,
+	"learned_in": true,
+	"part_of":    true,
+	"relates_to": true,
+	"depends_on": true,
+	"touches":    true,
+}
+
 var acyclicEdges = map[string]bool{
 	"caused_by":  true,
 	"led_to":     true,
@@ -24,6 +35,9 @@ var acyclicEdges = map[string]bool{
 	"learned_in": true,
 	"part_of":    true,
 }
+
+// IsValidEdgeType reports whether t is a recognized edge type.
+func IsValidEdgeType(t string) bool { return validEdgeTypes[t] }
 
 // IsAcyclic returns true if the edge type enforces DAG constraint.
 func IsAcyclic(edgeType string) bool { return acyclicEdges[edgeType] }
@@ -87,18 +101,26 @@ type Subgraph struct {
 }
 
 // BFS performs breadth-first traversal from startID up to maxDepth, returning visited node IDs.
+// Acyclic edges (DAG edges: led_to, caused_by, supersedes, learned_in, part_of) are traversed
+// only in their natural direction (from_id → to_id). Cyclic edges (relates_to, depends_on,
+// touches) are traversed bidirectionally.
 func (g *graphImpl) BFS(ctx context.Context, startID string, maxDepth int) ([]string, error) {
 	query := `
 		WITH RECURSIVE sg(id, depth) AS (
 			SELECT ?, 0
 			UNION ALL
+			SELECT e.to_id, sg.depth + 1
+			FROM sg
+			JOIN edges e ON e.from_id = sg.id
+			WHERE sg.depth < ? AND e.acyclic = 1
+			UNION ALL
 			SELECT CASE WHEN e.from_id = sg.id THEN e.to_id ELSE e.from_id END, sg.depth + 1
 			FROM sg
-			JOIN edges e ON e.from_id = sg.id OR e.to_id = sg.id
-			WHERE sg.depth < ?
+			JOIN edges e ON (e.from_id = sg.id OR e.to_id = sg.id)
+			WHERE sg.depth < ? AND e.acyclic = 0
 		)
 		SELECT DISTINCT id FROM sg`
-	rows, err := g.db.QueryContext(ctx, query, startID, maxDepth)
+	rows, err := g.db.QueryContext(ctx, query, startID, maxDepth, maxDepth)
 	if err != nil {
 		return nil, err
 	}
@@ -128,21 +150,10 @@ func (g *graphImpl) ExtractSubgraph(ctx context.Context, startID string, maxDept
 	if err == nil {
 		sg.Nodes = nodes
 	}
-	// Collect edges between subgraph nodes
-	idSet := make(map[string]bool, len(ids))
-	for _, id := range ids {
-		idSet[id] = true
-	}
-	for _, id := range ids {
-		edges, err := g.store.GetEdgesFrom(ctx, id)
-		if err != nil {
-			continue
-		}
-		for _, e := range edges {
-			if idSet[e.ToID] {
-				sg.Edges = append(sg.Edges, e)
-			}
-		}
+	// Collect edges between subgraph nodes (single batched query, no N+1)
+	edges, err := g.store.GetEdgesBetween(ctx, ids)
+	if err == nil {
+		sg.Edges = edges
 	}
 	return sg, nil
 }

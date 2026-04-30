@@ -11,6 +11,7 @@ import (
 	"github.com/GrayCodeAI/yaad/internal/server"
 	"github.com/GrayCodeAI/yaad/internal/storage"
 	"github.com/GrayCodeAI/yaad/internal/utils"
+	"github.com/GrayCodeAI/yaad/internal/version"
 )
 
 var serveCmd = &cobra.Command{
@@ -20,7 +21,7 @@ var serveCmd = &cobra.Command{
 		eng := openEngine()
 		defer eng.Store().Close()
 		addr, _ := cmd.Flags().GetString("addr")
-		fmt.Printf("yaad v%s — REST API on %s\n", version, addr)
+		fmt.Printf("yaad v%s — REST API on %s\n", version.String(), addr)
 		rest := server.NewRESTServer(eng, addr)
 		if err := rest.ListenAndServe(); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)

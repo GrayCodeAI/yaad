@@ -22,6 +22,8 @@ func (e *Engine) Feedback(ctx context.Context, id string, action FeedbackAction,
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	node, err := e.store.GetNode(ctx, id)
 	if err != nil {
 		return fmt.Errorf("node %s not found: %w", id, err)
@@ -38,7 +40,9 @@ func (e *Engine) Feedback(ctx context.Context, id string, action FeedbackAction,
 		if newContent == "" {
 			return fmt.Errorf("edit requires new content")
 		}
-		_ = e.store.SaveVersion(ctx, node.ID, node.Content, "user", "edited via feedback")
+		if err := e.store.SaveVersion(ctx, node.ID, node.Content, "user", "edited via feedback"); err != nil {
+			return fmt.Errorf("save version: %w", err)
+		}
 		node.Content = newContent
 		node.ContentHash = contentHash(newContent, node.Scope, node.Project)
 		node.Version++
@@ -47,7 +51,9 @@ func (e *Engine) Feedback(ctx context.Context, id string, action FeedbackAction,
 		return e.store.UpdateNode(ctx, node)
 
 	case FeedbackDiscard:
-		_ = e.store.SaveVersion(ctx, node.ID, node.Content, "user", "discarded via feedback")
+		if err := e.store.SaveVersion(ctx, node.ID, node.Content, "user", "discarded via feedback"); err != nil {
+			return fmt.Errorf("save version: %w", err)
+		}
 		node.Confidence = 0
 		return e.store.UpdateNode(ctx, node)
 
@@ -61,6 +67,8 @@ func (e *Engine) Rollback(ctx context.Context, id string, version int) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	versions, err := e.store.GetVersions(ctx, id)
 	if err != nil {
 		return err
@@ -71,7 +79,9 @@ func (e *Engine) Rollback(ctx context.Context, id string, version int) error {
 			if err != nil {
 				return err
 			}
-			_ = e.store.SaveVersion(ctx, node.ID, node.Content, "system", fmt.Sprintf("rollback to v%d", version))
+			if err := e.store.SaveVersion(ctx, node.ID, node.Content, "system", fmt.Sprintf("rollback to v%d", version)); err != nil {
+				return fmt.Errorf("save version: %w", err)
+			}
 			node.Content = v.Content
 			node.Version++
 			node.UpdatedAt = time.Now()
@@ -82,11 +92,12 @@ func (e *Engine) Rollback(ctx context.Context, id string, version int) error {
 }
 
 // PendingNodes returns low-confidence nodes that may need review.
+// Limited to 1000 nodes to prevent unbounded memory use on large graphs.
 func (e *Engine) PendingNodes(ctx context.Context, project string, threshold float64) ([]*storage.Node, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	nodes, err := e.store.ListNodes(ctx, storage.NodeFilter{Project: project})
+	nodes, err := e.store.ListNodes(ctx, storage.NodeFilter{Project: project, MinConfidence: 0.01})
 	if err != nil {
 		return nil, err
 	}
@@ -94,6 +105,9 @@ func (e *Engine) PendingNodes(ctx context.Context, project string, threshold flo
 	for _, n := range nodes {
 		if n.Confidence > 0 && n.Confidence < threshold {
 			pending = append(pending, n)
+			if len(pending) >= 1000 {
+				break
+			}
 		}
 	}
 	return pending, nil

@@ -25,6 +25,7 @@ type Storage interface {
 	DeleteEdge(ctx context.Context, id string) error
 	GetEdgesFrom(ctx context.Context, nodeID string) ([]*Edge, error)
 	GetEdgesTo(ctx context.Context, nodeID string) ([]*Edge, error)
+	GetEdgesBetween(ctx context.Context, nodeIDs []string) ([]*Edge, error)
 	CountEdges(ctx context.Context, nodeID string) (inbound int, outbound int, err error)
 	CountAllEdges(ctx context.Context) (int, error)
 
@@ -52,6 +53,10 @@ type Storage interface {
 
 	// File watch (staleness tracking)
 	AddFileWatch(ctx context.Context, filePath, nodeID, gitHash string) error
+
+	// AccessLog: lightweight access tracking (batched flush)
+	LogAccess(ctx context.Context, nodeID string) error
+	FlushAccessLog(ctx context.Context) (int, error)
 
 	// Transactions
 	WithTx(ctx context.Context, fn func(Storage) error) error

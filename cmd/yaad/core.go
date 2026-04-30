@@ -11,6 +11,7 @@ import (
 	"github.com/GrayCodeAI/yaad/internal/engine"
 	"github.com/GrayCodeAI/yaad/internal/storage"
 	"github.com/GrayCodeAI/yaad/internal/utils"
+	"github.com/GrayCodeAI/yaad/internal/version"
 )
 
 var initCmd = &cobra.Command{
@@ -178,7 +179,7 @@ var statusCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("yaad v%s\n", version)
+		fmt.Printf("yaad v%s\n", version.String())
 		fmt.Printf("  Nodes:    %d\n", st.Nodes)
 		fmt.Printf("  Edges:    %d\n", st.Edges)
 		fmt.Printf("  Sessions: %d\n", st.Sessions)

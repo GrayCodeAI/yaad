@@ -21,11 +21,13 @@ func dbPath() string {
 // openEngine opens the yaad database and returns an engine.
 // Exits on error — CLI commands should not continue without a DB.
 func openEngine() *engine.Engine {
-	if err := os.MkdirAll(filepath.Dir(dbPath()), 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "error creating .yaad/: %v\n", err)
+	path := dbPath()
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "error: no yaad project found in %s\n", filepath.Dir(path))
+		fmt.Fprintf(os.Stderr, "Run 'yaad init' to initialize a project.\n")
 		os.Exit(1)
 	}
-	store, err := storage.NewStore(dbPath())
+	store, err := storage.NewStore(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error opening database: %v\n", err)
 		os.Exit(1)

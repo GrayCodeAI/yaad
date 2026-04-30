@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -85,19 +86,30 @@ func Load(projectDir string) (*Config, error) {
 	// Global config
 	home, err := os.UserHomeDir()
 	if err == nil {
-		loadFile(filepath.Join(home, ".yaad", "config.toml"), cfg)
+		if err := loadFile(filepath.Join(home, ".yaad", "config.toml"), cfg); err != nil {
+			return nil, err
+		}
 	}
 
 	// Project config (overrides global)
 	if projectDir != "" {
-		loadFile(filepath.Join(projectDir, ".yaad", "config.toml"), cfg)
+		if err := loadFile(filepath.Join(projectDir, ".yaad", "config.toml"), cfg); err != nil {
+			return nil, err
+		}
 	}
 
 	return cfg, nil
 }
 
-func loadFile(path string, cfg *Config) {
-	if _, err := os.Stat(path); err == nil {
-		toml.DecodeFile(path, cfg)
+func loadFile(path string, cfg *Config) error {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil // no file to load, not an error
+		}
+		return err
 	}
+	if _, err := toml.DecodeFile(path, cfg); err != nil {
+		return fmt.Errorf("invalid config %s: %w", path, err)
+	}
+	return nil
 }

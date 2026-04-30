@@ -18,6 +18,7 @@ import (
 	"github.com/GrayCodeAI/yaad/internal/engine"
 	"github.com/GrayCodeAI/yaad/internal/graph"
 	"github.com/GrayCodeAI/yaad/internal/storage"
+	"github.com/GrayCodeAI/yaad/internal/version"
 )
 
 // --- gRPC message types (JSON-serializable) ---
@@ -58,11 +59,19 @@ type GRPCServer struct {
 	addr     string
 	mu       sync.RWMutex
 	watchers []chan *MemoryEvent
+	srv      *grpc.Server
 }
 
 // NewGRPCServer creates a gRPC server.
 func NewGRPCServer(eng *engine.Engine, addr string) *GRPCServer {
 	return &GRPCServer{eng: eng, addr: addr}
+}
+
+// Shutdown gracefully stops the gRPC server.
+func (s *GRPCServer) Shutdown() {
+	if s.srv != nil {
+		s.srv.GracefulStop()
+	}
 }
 
 // ListenAndServe starts the gRPC server.
@@ -71,9 +80,9 @@ func (s *GRPCServer) ListenAndServe() error {
 	if err != nil {
 		return err
 	}
-	srv := grpc.NewServer()
+	s.srv = grpc.NewServer()
 	// Register as an untyped service using grpc.ServiceDesc
-	srv.RegisterService(&grpc.ServiceDesc{
+	s.srv.RegisterService(&grpc.ServiceDesc{
 		ServiceName: "yaad.Yaad",
 		HandlerType: (*interface{})(nil),
 		Methods: []grpc.MethodDesc{
@@ -95,7 +104,7 @@ func (s *GRPCServer) ListenAndServe() error {
 		},
 	}, s)
 	fmt.Printf("yaad gRPC listening on %s\n", s.addr)
-	return srv.Serve(ln)
+	return s.srv.Serve(ln)
 }
 
 // NotifyWatchers broadcasts a memory event to all active WatchMemories streams.
@@ -262,7 +271,7 @@ func (s *GRPCServer) grpcSessionEnd(_ interface{}, ctx context.Context, dec func
 }
 
 func (s *GRPCServer) grpcHealth(_ interface{}, ctx context.Context, dec func(interface{}) error, _ grpc.UnaryServerInterceptor) (interface{}, error) {
-	return map[string]string{"status": "ok", "version": "0.1.0"}, nil
+	return map[string]string{"status": "ok", "version": version.String()}, nil
 }
 
 func (s *GRPCServer) grpcGraphStats(_ interface{}, ctx context.Context, dec func(interface{}) error, _ grpc.UnaryServerInterceptor) (interface{}, error) {

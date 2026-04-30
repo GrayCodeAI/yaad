@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1156,4 +1157,64 @@ func TestRESTAPI(t *testing.T) {
 		t.Errorf("context: expected 200, got %d", resp.StatusCode)
 	}
 	resp.Body.Close()
+}
+
+// TestConcurrentSQLiteAccess verifies that concurrent Remember and Recall operations
+// against the real SQLite backend do not race or corrupt data.
+func TestConcurrentSQLiteAccess(t *testing.T) {
+	eng, cleanup := setup(t)
+	defer cleanup()
+
+	var wg sync.WaitGroup
+	numWriters := 5
+	numReaders := 5
+	opsPerGoroutine := 10
+
+	// Writers
+	for i := 0; i < numWriters; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			for j := 0; j < opsPerGoroutine; j++ {
+				_, err := eng.Remember(context.Background(), engine.RememberInput{
+					Type:    "convention",
+					Content: fmt.Sprintf("writer-%d-op-%d", idx, j),
+					Scope:   "project",
+					Project: "concurrent-test",
+				})
+				if err != nil {
+					t.Errorf("writer %d op %d failed: %v", idx, j, err)
+				}
+			}
+		}(i)
+	}
+
+	// Readers
+	for i := 0; i < numReaders; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			for j := 0; j < opsPerGoroutine; j++ {
+				_, err := eng.Recall(context.Background(), engine.RecallOpts{
+					Query:   "writer",
+					Project: "concurrent-test",
+					Limit:   10,
+				})
+				if err != nil {
+					t.Errorf("reader %d op %d failed: %v", idx, j, err)
+				}
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	st, err := eng.Status(context.Background(), "concurrent-test")
+	if err != nil {
+		t.Fatalf("status failed: %v", err)
+	}
+	expectedNodes := numWriters * opsPerGoroutine
+	if st.Nodes < expectedNodes {
+		t.Errorf("expected at least %d nodes, got %d", expectedNodes, st.Nodes)
+	}
 }

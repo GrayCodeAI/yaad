@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,13 +16,17 @@ import (
 	"github.com/GrayCodeAI/yaad/internal/embeddings"
 	"github.com/GrayCodeAI/yaad/internal/engine"
 	"github.com/GrayCodeAI/yaad/internal/exportimport"
+	"github.com/GrayCodeAI/yaad/internal/graph"
 	"github.com/GrayCodeAI/yaad/internal/skill"
 	"github.com/GrayCodeAI/yaad/internal/storage"
 	"github.com/GrayCodeAI/yaad/internal/team"
+	"github.com/GrayCodeAI/yaad/internal/version"
 )
 
-// version is set at build time via -ldflags.
-var version = "dev"
+const (
+	maxRequestBodySize = 1 << 20 // 1 MB
+	maxGraphDepth      = 5
+)
 
 // RESTServer serves the HTTP API.
 type RESTServer struct {
@@ -29,6 +35,7 @@ type RESTServer struct {
 	tlsCfg   *stdtls.Config
 	embedder embeddings.Provider // nil = no vector search
 	SSE      *SSEBroker
+	srv      *http.Server
 }
 
 // NewRESTServer creates a REST server.
@@ -52,8 +59,8 @@ func (s *RESTServer) WithTLS(cfg *stdtls.Config) *RESTServer {
 func (s *RESTServer) ListenAndServe() error {
 	mux := http.NewServeMux()
 	s.RegisterRoutes(mux)
-	wrapped := s.withMiddleware(mux)
-	srv := &http.Server{
+	wrapped := s.withMiddleware(s.withRateLimit(mux))
+	s.srv = &http.Server{
 		Addr:         s.addr,
 		Handler:      http.TimeoutHandler(wrapped, 30*time.Second, `{"error":"request timeout"}`),
 		TLSConfig:    s.tlsCfg,
@@ -67,16 +74,26 @@ func (s *RESTServer) ListenAndServe() error {
 		if err != nil {
 			return err
 		}
-		return srv.Serve(ln)
+		return s.srv.Serve(ln)
 	}
 	fmt.Printf("yaad REST API listening on %s\n", s.addr)
-	return srv.ListenAndServe()
+	return s.srv.ListenAndServe()
+}
+
+// Shutdown gracefully shuts down the REST server with a timeout.
+func (s *RESTServer) Shutdown(ctx context.Context) error {
+	if s.srv == nil {
+		return nil
+	}
+	return s.srv.Shutdown(ctx)
 }
 
 // withMiddleware wraps the handler with panic recovery and request logging.
 func (s *RESTServer) withMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+		// Limit request body size
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
 		// Panic recovery
 		defer func() {
 			if rec := recover(); rec != nil {
@@ -133,8 +150,17 @@ func (s *RESTServer) RegisterRoutes(mux *http.ServeMux) {
 
 func (s *RESTServer) handleRemember(w http.ResponseWriter, r *http.Request) {
 	var in engine.RememberInput
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		httpErr(w, err, 400)
+	if err := decodeJSON(r, &in); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			httpErr(w, err, 413)
+		} else {
+			httpErr(w, err, 400)
+		}
+		return
+	}
+	if in.Type != "" && !engine.IsValidNodeType(in.Type) {
+		httpErr(w, fmt.Errorf("invalid node type: %q", in.Type), 400)
 		return
 	}
 	node, err := s.eng.Remember(r.Context(), in)
@@ -149,8 +175,17 @@ func (s *RESTServer) handleRemember(w http.ResponseWriter, r *http.Request) {
 
 func (s *RESTServer) handleRecall(w http.ResponseWriter, r *http.Request) {
 	var opts engine.RecallOpts
-	if err := json.NewDecoder(r.Body).Decode(&opts); err != nil {
-		httpErr(w, err, 400)
+	if err := decodeJSON(r, &opts); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			httpErr(w, err, 413)
+		} else {
+			httpErr(w, err, 400)
+		}
+		return
+	}
+	if opts.Depth > maxGraphDepth {
+		httpErr(w, fmt.Errorf("depth exceeds maximum of %d", maxGraphDepth), 400)
 		return
 	}
 	result, err := s.eng.Recall(r.Context(), opts)
@@ -173,8 +208,21 @@ func (s *RESTServer) handleContext(w http.ResponseWriter, r *http.Request) {
 
 func (s *RESTServer) handleLink(w http.ResponseWriter, r *http.Request) {
 	var edge storage.Edge
-	if err := json.NewDecoder(r.Body).Decode(&edge); err != nil {
-		httpErr(w, err, 400)
+	if err := decodeJSON(r, &edge); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			httpErr(w, err, 413)
+		} else {
+			httpErr(w, err, 400)
+		}
+		return
+	}
+	if edge.Type == "" {
+		httpErr(w, fmt.Errorf("edge type is required"), 400)
+		return
+	}
+	if !graph.IsValidEdgeType(edge.Type) {
+		httpErr(w, fmt.Errorf("invalid edge type: %q", edge.Type), 400)
 		return
 	}
 	if edge.ID == "" {
@@ -210,6 +258,10 @@ func (s *RESTServer) handleGetNode(w http.ResponseWriter, r *http.Request) {
 func (s *RESTServer) handleSubgraph(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	depth := intQuery(r, "depth", 2)
+	if depth > maxGraphDepth {
+		httpErr(w, fmt.Errorf("depth exceeds maximum of %d", maxGraphDepth), 400)
+		return
+	}
 	sg, err := s.eng.Graph().ExtractSubgraph(r.Context(), id, depth)
 	if err != nil {
 		httpErr(w, err, 500)
@@ -221,6 +273,10 @@ func (s *RESTServer) handleSubgraph(w http.ResponseWriter, r *http.Request) {
 func (s *RESTServer) handleImpact(w http.ResponseWriter, r *http.Request) {
 	file := r.PathValue("file")
 	depth := intQuery(r, "depth", 3)
+	if depth > maxGraphDepth {
+		httpErr(w, fmt.Errorf("depth exceeds maximum of %d", maxGraphDepth), 400)
+		return
+	}
 	ids, err := s.eng.Graph().Impact(r.Context(), file, depth)
 	if err != nil {
 		httpErr(w, err, 500)
@@ -251,11 +307,11 @@ func (s *RESTServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 		httpJSON(w, map[string]string{"status": "error", "error": err.Error()}, 503)
 		return
 	}
-	httpJSON(w, map[string]string{"status": "ok", "version": version}, 200)
+	httpJSON(w, map[string]string{"status": "ok", "version": version.String()}, 200)
 }
 
 func (s *RESTServer) handleVersion(w http.ResponseWriter, _ *http.Request) {
-	httpJSON(w, map[string]string{"version": version}, 200)
+	httpJSON(w, map[string]string{"version": version.String()}, 200)
 }
 
 func (s *RESTServer) handleStats(w http.ResponseWriter, r *http.Request) {
@@ -284,7 +340,15 @@ func (s *RESTServer) handleSessionStart(w http.ResponseWriter, r *http.Request) 
 		Project string `json:"project"`
 		Agent   string `json:"agent"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
+	if err := decodeJSON(r, &body); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			httpErr(w, err, 413)
+		} else {
+			httpErr(w, err, 400)
+		}
+		return
+	}
 	sess := &storage.Session{
 		ID:        uuid.New().String(),
 		Project:   body.Project,
@@ -304,8 +368,13 @@ func (s *RESTServer) handleSessionEnd(w http.ResponseWriter, r *http.Request) {
 		ID      string `json:"id"`
 		Summary string `json:"summary"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		httpErr(w, err, 400)
+	if err := decodeJSON(r, &body); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			httpErr(w, err, 413)
+		} else {
+			httpErr(w, err, 400)
+		}
 		return
 	}
 	if err := s.eng.Store().EndSession(r.Context(), body.ID, body.Summary); err != nil {
@@ -323,8 +392,13 @@ func (s *RESTServer) handleEmbed(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		NodeID string `json:"node_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		httpErr(w, err, 400)
+	if err := decodeJSON(r, &body); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			httpErr(w, err, 413)
+		} else {
+			httpErr(w, err, 400)
+		}
 		return
 	}
 	if s.embedder == nil {
@@ -350,8 +424,13 @@ func (s *RESTServer) handleEmbed(w http.ResponseWriter, r *http.Request) {
 
 func (s *RESTServer) handleHybridRecall(w http.ResponseWriter, r *http.Request) {
 	var opts engine.RecallOpts
-	if err := json.NewDecoder(r.Body).Decode(&opts); err != nil {
-		httpErr(w, err, 400)
+	if err := decodeJSON(r, &opts); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			httpErr(w, err, 413)
+		} else {
+			httpErr(w, err, 400)
+		}
 		return
 	}
 	hs := engine.NewHybridSearch(s.eng.Store(), s.eng.Graph(), s.embedder)
@@ -385,8 +464,13 @@ func (s *RESTServer) handleFeedback(w http.ResponseWriter, r *http.Request) {
 		Action     engine.FeedbackAction `json:"action"`
 		NewContent string               `json:"new_content"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		httpErr(w, err, 400)
+	if err := decodeJSON(r, &body); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			httpErr(w, err, 413)
+		} else {
+			httpErr(w, err, 400)
+		}
 		return
 	}
 	if err := s.eng.Feedback(r.Context(), body.ID, body.Action, body.NewContent); err != nil {
@@ -452,8 +536,13 @@ func (s *RESTServer) handleExportObsidian(w http.ResponseWriter, r *http.Request
 		Project  string `json:"project"`
 		VaultDir string `json:"vault_dir"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		httpErr(w, err, 400)
+	if err := decodeJSON(r, &body); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			httpErr(w, err, 413)
+		} else {
+			httpErr(w, err, 400)
+		}
 		return
 	}
 	n, err := exportimport.ExportObsidian(r.Context(), s.eng.Store(), body.Project, body.VaultDir)
@@ -480,8 +569,13 @@ func (s *RESTServer) handleImportJSON(w http.ResponseWriter, r *http.Request) {
 
 func (s *RESTServer) handleTeamShare(w http.ResponseWriter, r *http.Request) {
 	var body team.ShareInput
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		httpErr(w, err, 400)
+	if err := decodeJSON(r, &body); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			httpErr(w, err, 413)
+		} else {
+			httpErr(w, err, 400)
+		}
 		return
 	}
 	// For simplicity, share within the same store (global scope)
@@ -505,8 +599,13 @@ func (s *RESTServer) handleTeamMemories(w http.ResponseWriter, r *http.Request) 
 
 func (s *RESTServer) handleSkillStore(w http.ResponseWriter, r *http.Request) {
 	var sk skill.Skill
-	if err := json.NewDecoder(r.Body).Decode(&sk); err != nil {
-		httpErr(w, err, 400)
+	if err := decodeJSON(r, &sk); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			httpErr(w, err, 413)
+		} else {
+			httpErr(w, err, 400)
+		}
 		return
 	}
 	project := r.URL.Query().Get("project")
@@ -584,6 +683,19 @@ func httpJSON(w http.ResponseWriter, v any, code int) {
 
 func httpErr(w http.ResponseWriter, err error, code int) {
 	httpJSON(w, map[string]string{"error": err.Error()}, code)
+}
+
+// decodeJSON unmarshals JSON from the request body, returning 413 if the body
+// exceeds MaxBytesReader limits.
+func decodeJSON(r *http.Request, v any) error {
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			return fmt.Errorf("request body exceeds %d bytes: %w", maxBytesErr.Limit, err)
+		}
+		return err
+	}
+	return nil
 }
 
 func intQuery(r *http.Request, key string, def int) int {

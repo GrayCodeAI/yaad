@@ -15,10 +15,12 @@ func (e *Engine) CompressSession(ctx context.Context, sessionID, project string)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	// Get all nodes created in this session
 	nodes, err := e.store.ListNodes(ctx, storage.NodeFilter{Project: project})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list nodes: %w", err)
 	}
 
 	var sessionNodes []*storage.Node
@@ -52,18 +54,21 @@ func (e *Engine) CompressSession(ctx context.Context, sessionID, project string)
 		return nil, err
 	}
 
-	// Link all session nodes to the session summary
+	// Link all session nodes to the session summary (best-effort)
 	for _, n := range sessionNodes {
-		_ = e.graph.AddEdge(ctx, &storage.Edge{
+		if err := e.graph.AddEdge(ctx, &storage.Edge{
 			ID:     uuid.New().String(),
 			FromID: n.ID,
 			ToID:   sessNode.ID,
 			Type:   "learned_in",
 			Weight: 1.0,
-		})
+		}); err != nil {
+			// Log but don't fail — the session node is already created
+			continue
+		}
 	}
 
-	// End the session in the sessions table
+	// End the session in the sessions table (best-effort)
 	_ = e.store.EndSession(ctx, sessionID, summary)
 
 	return sessNode, nil
@@ -100,6 +105,8 @@ func (e *Engine) StartSession(ctx context.Context, project, agent string) (strin
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	id := uuid.New().String()
 	sess := &storage.Session{
 		ID:        id,
@@ -107,5 +114,8 @@ func (e *Engine) StartSession(ctx context.Context, project, agent string) (strin
 		Agent:     agent,
 		StartedAt: time.Now(),
 	}
-	return id, e.store.CreateSession(ctx, sess)
+	if err := e.store.CreateSession(ctx, sess); err != nil {
+		return "", fmt.Errorf("create session: %w", err)
+	}
+	return id, nil
 }

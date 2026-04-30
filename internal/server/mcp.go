@@ -8,10 +8,11 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
-	intentpkg "github.com/GrayCodeAI/yaad/internal/intent"
 	"github.com/GrayCodeAI/yaad/internal/engine"
-	"github.com/GrayCodeAI/yaad/internal/utils"
+	"github.com/GrayCodeAI/yaad/internal/graph"
+	intentpkg "github.com/GrayCodeAI/yaad/internal/intent"
 	"github.com/GrayCodeAI/yaad/internal/storage"
+	"github.com/GrayCodeAI/yaad/internal/utils"
 )
 
 // MCPServer wraps the MCP protocol server.
@@ -97,14 +98,15 @@ func (s *MCPServer) registerTools() {
 	), s.handleUnlink)
 
 	// yaad_subgraph (extended — only in "all" profile)
-	if s.ToolProfile == "all" {	add(mcp.NewTool("yaad_subgraph",
-		mcp.WithDescription("Get subgraph around a node via BFS"),
-		mcp.WithString("id", mcp.Required(), mcp.Description("Center node ID")),
-		mcp.WithNumber("depth", mcp.Description("BFS depth (default 2)")),
-	), s.handleSubgraph)
+	if s.ToolProfile == "all" {
+		add(mcp.NewTool("yaad_subgraph",
+			mcp.WithDescription("Get subgraph around a node via BFS"),
+			mcp.WithString("id", mcp.Required(), mcp.Description("Center node ID")),
+			mcp.WithNumber("depth", mcp.Description("BFS depth (default 2)")),
+		), s.handleSubgraph)
 
-	// yaad_impact
-	add(mcp.NewTool("yaad_impact",
+		// yaad_impact
+		add(mcp.NewTool("yaad_impact",
 		mcp.WithDescription("Impact analysis: what memories are affected if a file changes"),
 		mcp.WithString("file", mcp.Required(), mcp.Description("File path")),
 		mcp.WithNumber("depth", mcp.Description("Traversal depth (default 3)")),
@@ -153,9 +155,13 @@ func (s *MCPServer) registerTools() {
 // --- Tool handlers ---
 
 func (s *MCPServer) handleRemember(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	typ := strArgOr(req, "type", "decision")
+	if typ != "" && !engine.IsValidNodeType(typ) {
+		return nil, fmt.Errorf("invalid node type: %q", typ)
+	}
 	in := engine.RememberInput{
 		Content: strArg(req, "content"),
-		Type:    strArgOr(req, "type", "decision"),
+		Type:    typ,
 		Summary: strArg(req, "summary"),
 		Tags:    strArg(req, "tags"),
 		Project: strArg(req, "project"),
@@ -198,10 +204,17 @@ func (s *MCPServer) handleForget(ctx context.Context, req mcp.CallToolRequest) (
 }
 
 func (s *MCPServer) handleLink(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	edgeType := strArg(req, "type")
+	if edgeType == "" {
+		return nil, fmt.Errorf("edge type is required")
+	}
+	if !graph.IsValidEdgeType(edgeType) {
+		return nil, fmt.Errorf("invalid edge type: %q", edgeType)
+	}
 	edge := &storage.Edge{
 		FromID: strArg(req, "from_id"),
 		ToID:   strArg(req, "to_id"),
-		Type:   strArg(req, "type"),
+		Type:   edgeType,
 		Weight: 1.0,
 	}
 	edge.ID = fmt.Sprintf("%s-%s-%s", utils.ShortID(edge.FromID), utils.ShortID(edge.ToID), edge.Type)
@@ -255,7 +268,9 @@ func (s *MCPServer) handleTaskUpdate(ctx context.Context, req mcp.CallToolReques
 	if err != nil {
 		return nil, err
 	}
-	_ = s.eng.Store().SaveVersion(ctx, node.ID, node.Content, "agent", "task update")
+	if err := s.eng.Store().SaveVersion(ctx, node.ID, node.Content, "agent", "task update"); err != nil {
+		return nil, fmt.Errorf("save version: %w", err)
+	}
 	node.Content = strArg(req, "content")
 	node.Version++
 	if err := s.eng.Store().UpdateNode(ctx, node); err != nil {
@@ -273,8 +288,17 @@ func (s *MCPServer) handleSessions(ctx context.Context, req mcp.CallToolRequest)
 }
 
 func (s *MCPServer) handleStale(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	// Placeholder — full git-aware staleness is Phase 2
-	return mcp.NewToolResultText("staleness detection available in Phase 2"), nil
+	project := strArg(req, "project")
+	st, err := s.eng.Status(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	return jsonResult(map[string]any{
+		"status":      "staleness detection requires git watcher (Phase 2)",
+		"nodes":       st.Nodes,
+		"edges":       st.Edges,
+		"sessions":    st.Sessions,
+	})
 }
 
 func (s *MCPServer) handleIntent(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

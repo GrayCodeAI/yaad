@@ -20,7 +20,16 @@ func NewSSEBroker() *SSEBroker {
 
 // Publish sends an event to all connected SSE clients.
 func (b *SSEBroker) Publish(event string, data any) {
-	payload, _ := json.Marshal(data)
+	// Recover from json.Marshal panic (e.g., cyclic data structures)
+	var payload []byte
+	func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				payload = []byte(`{"error":"marshal panic"}`)
+			}
+		}()
+		payload, _ = json.Marshal(data)
+	}()
 	msg := fmt.Sprintf("event: %s\ndata: %s\n\n", event, payload)
 	b.mu.RLock()
 	defer b.mu.RUnlock()

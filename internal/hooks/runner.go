@@ -70,7 +70,10 @@ func (r *Runner) SessionStart(ctx context.Context, in *HookInput) error {
 	}
 
 	// Write session ID to a temp file for other hooks to pick up
-	_ = os.WriteFile(sessionFile(r.project), []byte(sessionID), 0644)
+	if err := os.WriteFile(sessionFile(r.project), []byte(sessionID), 0644); err != nil {
+		// Best-effort: log but don't fail the hook
+		fmt.Fprintf(os.Stderr, "yaad: warning: could not write session file: %v\n", err)
+	}
 
 	// Get context and print to stdout (Claude Code injects stdout into session)
 	result, err := r.eng.Context(ctx, r.project)
@@ -119,21 +122,25 @@ func (r *Runner) SessionEnd(ctx context.Context, in *HookInput) error {
 
 	// Store summary as a decision/spec if provided
 	if in.Summary != "" {
-		_, _ = r.eng.Remember(ctx, engine.RememberInput{
+		if _, err := r.eng.Remember(ctx, engine.RememberInput{
 			Type:    "session",
 			Content: privacy.Filter(in.Summary),
 			Scope:   "project",
 			Project: r.project,
 			Session: sessionID,
 			Agent:   in.Agent,
-		})
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "yaad: warning: could not store session summary: %v\n", err)
+		}
 	}
 
 	// Compress session
 	_, err := r.eng.CompressSession(ctx, sessionID, r.project)
 
-	// Clean up session file
-	_ = os.Remove(sessionFile(r.project))
+	// Clean up session file (best-effort)
+	if rmErr := os.Remove(sessionFile(r.project)); rmErr != nil {
+		fmt.Fprintf(os.Stderr, "yaad: warning: could not remove session file: %v\n", rmErr)
+	}
 	return err
 }
 

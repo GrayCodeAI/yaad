@@ -259,6 +259,26 @@ func (m *mockStorage) GetEdgesTo(ctx context.Context, nodeID string) ([]*storage
 	return out, nil
 }
 
+func (m *mockStorage) GetEdgesBetween(ctx context.Context, nodeIDs []string) ([]*storage.Edge, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	idSet := make(map[string]bool, len(nodeIDs))
+	for _, id := range nodeIDs {
+		idSet[id] = true
+	}
+	var out []*storage.Edge
+	for _, e := range m.edges {
+		if idSet[e.FromID] && idSet[e.ToID] {
+			cp := *e
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
 func (m *mockStorage) CountEdges(ctx context.Context, nodeID string) (inbound int, outbound int, err error) {
 	if err := ctx.Err(); err != nil {
 		return 0, 0, err
@@ -443,6 +463,8 @@ func (m *mockStorage) AddReplayEvent(ctx context.Context, sessionID, data string
 func (m *mockStorage) GetReplayEvents(ctx context.Context, sessionID string) ([]*storage.ReplayEvent, error) {
 	return nil, nil
 }
+func (m *mockStorage) LogAccess(ctx context.Context, nodeID string) error { return nil }
+func (m *mockStorage) FlushAccessLog(ctx context.Context) (int, error) { return 0, nil }
 func (m *mockStorage) WithTx(ctx context.Context, fn func(storage.Storage) error) error {
 	return fn(m)
 }

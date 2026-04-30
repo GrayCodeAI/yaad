@@ -7,8 +7,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var version = "dev" // set by -ldflags="-X main.version=v0.1.0" at build time
-
 func main() {
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

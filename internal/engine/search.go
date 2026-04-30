@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"sort"
 
 	"github.com/GrayCodeAI/yaad/internal/embeddings"
@@ -45,7 +46,10 @@ func (h *HybridSearch) Search(ctx context.Context, query string, opts RecallOpts
 	queryIntent := intent.Classify(query)
 
 	// Path 1: BM25 seed nodes
-	bm25Nodes, _ := h.store.SearchNodes(ctx, query, opts.Limit*2)
+	bm25Nodes, err := h.store.SearchNodes(ctx, query, opts.Limit*2)
+	if err != nil {
+		return nil, fmt.Errorf("bm25 search: %w", err)
+	}
 	bm25Ranks := rankMap(bm25Nodes)
 
 	// Path 2: Vector seed nodes (if provider available)

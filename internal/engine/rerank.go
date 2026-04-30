@@ -24,8 +24,8 @@ func combinedScore(ctx context.Context, sn *ScoredNode, store storage.Storage, n
 	n := sn.Node
 
 	// Centrality: count inbound edges (more connections = more important)
-	inbound, _ := store.GetEdgesTo(ctx, n.ID)
-	centrality := 1.0 + float64(len(inbound))*0.1
+	inboundCount, _, _ := store.CountEdges(ctx, n.ID)
+	centrality := 1.0 + float64(inboundCount)*0.1
 
 	// Recency: exponential decay over 30 days
 	recency := 1.0

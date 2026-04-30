@@ -10,7 +10,10 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"time"
 )
+
+var httpClient = &http.Client{Timeout: 30 * time.Second}
 
 // Provider generates vector embeddings for text.
 type Provider interface {
@@ -41,15 +44,21 @@ func (p *openAI) Name() string { return "openai:" + p.model }
 func (p *openAI) Dims() int    { return p.dims }
 
 func (p *openAI) Embed(ctx context.Context, text string) ([]float32, error) {
-	body, _ := json.Marshal(map[string]any{
+	body, err := json.Marshal(map[string]any{
 		"input": text,
 		"model": p.model,
 	})
-	req, _ := http.NewRequestWithContext(ctx, "POST", "https://api.openai.com/v1/embeddings", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("openai: marshal: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.openai.com/v1/embeddings", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("openai: create request: %w", err)
+	}
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -93,15 +102,21 @@ func (p *voyage) Name() string { return "voyage:" + p.model }
 func (p *voyage) Dims() int    { return 1024 }
 
 func (p *voyage) Embed(ctx context.Context, text string) ([]float32, error) {
-	body, _ := json.Marshal(map[string]any{
+	body, err := json.Marshal(map[string]any{
 		"input": []string{text},
 		"model": p.model,
 	})
-	req, _ := http.NewRequestWithContext(ctx, "POST", "https://api.voyageai.com/v1/embeddings", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("voyage: marshal: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.voyageai.com/v1/embeddings", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("voyage: create request: %w", err)
+	}
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

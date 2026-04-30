@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"strings"
 	"time"
@@ -38,13 +39,14 @@ func (w *Watcher) StalesSince(ctx context.Context, since time.Time) ([]StaleRepo
 
 	var reports []StaleReport
 	for _, file := range files {
-		ids, err := w.graph.Impact(ctx, file, 3)
+		ids, err := w.graph.Impact(ctx, file, 5)
 		if err != nil || len(ids) == 0 {
 			continue
 		}
 		reports = append(reports, StaleReport{
-			File:    file,
-			NodeIDs: ids,
+			File:      file,
+			ChangedAt: since,
+			NodeIDs:   ids,
 		})
 	}
 	return reports, nil
@@ -53,10 +55,12 @@ func (w *Watcher) StalesSince(ctx context.Context, since time.Time) ([]StaleRepo
 // changedFiles returns files changed since the given time via git log.
 func (w *Watcher) changedFiles(since time.Time) ([]string, error) {
 	sinceStr := since.UTC().Format("2006-01-02T15:04:05")
-	out, err := exec.Command("git", "-C", w.dir, "log",
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", "-C", w.dir, "log",
 		"--since="+sinceStr, "--name-only", "--pretty=format:").Output()
 	if err != nil {
-		return nil, err // not a git repo or git not installed
+		return nil, fmt.Errorf("git log: %w", err)
 	}
 	seen := map[string]bool{}
 	var files []string
@@ -78,7 +82,9 @@ func (w *Watcher) WatchFile(ctx context.Context, filePath, nodeID, gitHash strin
 
 // CurrentHash returns the current git HEAD hash.
 func CurrentHash(dir string) string {
-	out, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "HEAD").Output()
 	if err != nil {
 		return ""
 	}

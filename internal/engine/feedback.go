@@ -40,6 +40,9 @@ func (e *Engine) Feedback(ctx context.Context, id string, action FeedbackAction,
 		if newContent == "" {
 			return fmt.Errorf("edit requires new content")
 		}
+		if len(newContent) > maxContentLength {
+			return fmt.Errorf("content exceeds max length of %d characters", maxContentLength)
+		}
 		if err := e.store.SaveVersion(ctx, node.ID, node.Content, "user", "edited via feedback"); err != nil {
 			return fmt.Errorf("save version: %w", err)
 		}

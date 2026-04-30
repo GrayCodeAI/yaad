@@ -65,43 +65,47 @@ func (r *Resolver) CheckAndResolve(ctx context.Context, newNode *storage.Node) (
 }
 
 // isContradiction detects if two nodes about the same topic say different things.
+// Conservative: requires high term overlap AND explicit contradiction signals.
 func isContradiction(newNode, oldNode *storage.Node) bool {
-	// Extract key entities from both
 	newEntities := extractKeyTerms(newNode.Content)
 	oldEntities := extractKeyTerms(oldNode.Content)
 
-	// Must share at least 1 key term for same-type nodes (same topic)
+	// Must share significant key terms (prevents false positives on loosely related content)
 	shared := 0
 	for term := range newEntities {
 		if oldEntities[term] {
 			shared++
 		}
 	}
-	if shared < 1 {
-		return false // completely different topics
+
+	// Require at least 3 shared terms, or >40% overlap with the smaller set
+	minSet := len(newEntities)
+	if len(oldEntities) < minSet {
+		minSet = len(oldEntities)
+	}
+	if minSet == 0 {
+		return false
+	}
+	overlapRatio := float64(shared) / float64(minSet)
+	if shared < 3 && overlapRatio < 0.4 {
+		return false
 	}
 
-	// Check for negation patterns
+	// Check for explicit negation/replacement patterns
 	newLower := strings.ToLower(newNode.Content)
+	hasContradictionSignal := strings.Contains(newLower, "instead of") ||
+		strings.Contains(newLower, "replaced") ||
+		strings.Contains(newLower, "switched from") ||
+		strings.Contains(newLower, "migrated from") ||
+		strings.Contains(newLower, "no longer")
 
-	// "Use X" vs "Don't use X" or "Use Y instead of X"
-	if strings.Contains(newLower, "instead of") || strings.Contains(newLower, "not ") ||
-		strings.Contains(newLower, "replaced") || strings.Contains(newLower, "switched") ||
-		strings.Contains(newLower, "migrated") || strings.Contains(newLower, "changed") {
+	if hasContradictionSignal {
 		return true
 	}
 
-	// "Chose X" vs "Chose Y" for same topic (shared entities but different choice)
-	if newNode.Type == "decision" && oldNode.Type == "decision" && shared >= 2 {
-		// Different content but same topic = likely updated decision
-		if newNode.Content != oldNode.Content {
-			return true
-		}
-	}
-
-	// Same convention type, same entities, different content = updated convention
-	if newNode.Type == "convention" && oldNode.Type == "convention" && shared >= 2 {
-		if newNode.Content != oldNode.Content {
+	// Same decision/convention topic (high overlap) with different content = updated
+	if overlapRatio >= 0.5 && newNode.Content != oldNode.Content {
+		if newNode.Type == "decision" || newNode.Type == "convention" {
 			return true
 		}
 	}

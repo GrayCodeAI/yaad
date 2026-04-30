@@ -48,6 +48,9 @@ func Run(ctx context.Context, eng *engine.Engine, qas []QA, depth, limit int) *R
 		Total:  len(qas),
 		HitAtK: map[int]int{1: 0, 3: 0, 5: 0, 10: 0},
 	}
+	if len(qas) == 0 {
+		return result
+	}
 	start := time.Now()
 	totalTokens := 0.0
 	mrrSum := 0.0

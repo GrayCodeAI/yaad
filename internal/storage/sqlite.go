@@ -50,12 +50,13 @@ type NodeFilter struct {
 	Type, Scope, Project string
 	Tier                 int
 	MinConfidence        float64
+	SourceSession        string
 }
 
 // Store
 
 // Store is the SQLite-backed storage layer for Yaad.
-const defaultBusyTimeoutMs = 5000
+const defaultBusyTimeoutMs = 10000
 
 type Store struct {
 	db *sql.DB
@@ -75,7 +76,9 @@ func NewStore(dbPath string) (*Store, error) {
 	if err := db.Ping(); err != nil {
 		return nil, err
 	}
-	// Limit connection pool to 1 writer + N readers for SQLite WAL mode.
+	// WAL mode supports concurrent readers alongside a single writer.
+	// With a single connection, Go's sql pool serializes all access, preventing SQLITE_BUSY.
+	// This is simpler and more reliable than relying on busy_timeout with concurrent connections.
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	s := &Store{db: db}
@@ -299,6 +302,10 @@ func (s *Store) ListNodes(ctx context.Context, f NodeFilter) ([]*Node, error) {
 		q += " AND confidence>=?"
 		args = append(args, f.MinConfidence)
 	}
+	if f.SourceSession != "" {
+		q += " AND source_session=?"
+		args = append(args, f.SourceSession)
+	}
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -479,14 +486,22 @@ func (s *Store) GetNodesByFile(ctx context.Context, filePath string) ([]*Node, e
 // --- Versions ---
 
 func (s *Store) SaveVersion(ctx context.Context, nodeID string, content, changedBy, reason string) error {
-	var maxVer int
-	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM node_versions WHERE node_id=?`, nodeID).Scan(&maxVer)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO node_versions (node_id, version, content, changed_at, changed_by, reason) VALUES (?, ?, ?, ?, ?, ?)`,
+	defer tx.Rollback()
+	var maxVer int
+	err = tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM node_versions WHERE node_id=?`, nodeID).Scan(&maxVer)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO node_versions (node_id, version, content, changed_at, changed_by, reason) VALUES (?, ?, ?, ?, ?, ?)`,
 		nodeID, maxVer+1, content, time.Now(), changedBy, reason)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) GetVersions(ctx context.Context, nodeID string) ([]*NodeVersion, error) {
@@ -564,10 +579,15 @@ func (s *Store) LogAccess(ctx context.Context, nodeID string) error {
 }
 
 // FlushAccessLog aggregates access_log entries into nodes.access_count / accessed_at,
-// then truncates the log. Returns the number of nodes updated.
+// then truncates the log. Runs atomically within a transaction.
 func (s *Store) FlushAccessLog(ctx context.Context) (int, error) {
-	// Aggregate: count accesses per node, get max created_at
-	rows, err := s.db.QueryContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.QueryContext(ctx, `
 		SELECT node_id, COUNT(*) as cnt, MAX(created_at) as last_at
 		FROM access_log
 		GROUP BY node_id`)
@@ -603,9 +623,8 @@ func (s *Store) FlushAccessLog(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
-	// Apply aggregated counts to nodes
 	for _, a := range aggs {
-		_, err := s.db.ExecContext(ctx, `
+		_, err := tx.ExecContext(ctx, `
 			UPDATE nodes
 			SET access_count = access_count + ?,
 			    accessed_at  = MAX(COALESCE(accessed_at, '1970-01-01'), ?)
@@ -616,12 +635,11 @@ func (s *Store) FlushAccessLog(ctx context.Context) (int, error) {
 		}
 	}
 
-	// Truncate the log
-	_, err = s.db.ExecContext(ctx, `DELETE FROM access_log`)
+	_, err = tx.ExecContext(ctx, `DELETE FROM access_log`)
 	if err != nil {
 		return 0, err
 	}
-	return len(aggs), nil
+	return len(aggs), tx.Commit()
 }
 
 // GetNodesBatch fetches multiple nodes by ID in a single query.
@@ -821,6 +839,10 @@ func (t *txStore) ListNodes(ctx context.Context, f NodeFilter) ([]*Node, error) 
 		q += " AND confidence>=?"
 		args = append(args, f.MinConfidence)
 	}
+	if f.SourceSession != "" {
+		q += " AND source_session=?"
+		args = append(args, f.SourceSession)
+	}
 	rows, err := t.tx.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -833,8 +855,7 @@ func (t *txStore) SearchNodes(ctx context.Context, query string, limit int) ([]*
 	if limit <= 0 {
 		limit = 10
 	}
-	words := strings.Fields(query)
-	ftsQuery := strings.Join(words, " OR ")
+	ftsQuery := escapeFTS5(query)
 	rows, err := t.tx.QueryContext(ctx, `SELECT n.id, n.type, n.content, n.content_hash, n.summary, n.scope, n.project, n.tier, n.tags, n.confidence, n.access_count, n.created_at, n.updated_at, n.accessed_at, n.source_session, n.source_agent, n.version
 		FROM nodes_fts f JOIN nodes n ON f.rowid = n.rowid WHERE nodes_fts MATCH ? ORDER BY rank LIMIT ?`, ftsQuery, limit)
 	if err != nil {
@@ -855,6 +876,9 @@ func (t *txStore) SearchNodeByHash(ctx context.Context, hash, scope, project str
 		&n.Tier, &n.Tags, &n.Confidence, &n.AccessCount, &n.CreatedAt, &n.UpdatedAt, &at,
 		&n.SourceSession, &n.SourceAgent, &n.Version)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	if at.Valid {

@@ -160,20 +160,18 @@ func (e *Engine) Remember(ctx context.Context, in RememberInput) (*storage.Node,
 		in.Tier = defaultTier(in.Type)
 	}
 
-	// 3. Rolling window dedup (skip near-duplicates within 5min)
+	// 3. Content hash for exact dedup
+	hash := contentHash(content, in.Scope, in.Project)
+
+	// 4. Rolling window dedup (skip near-duplicates within 5min)
 	if e.dedup.IsDuplicate(content) {
-		// Find existing by hash and boost
-		hash := contentHash(content, in.Scope, in.Project)
 		existing, _ := e.store.SearchNodeByHash(ctx, hash, in.Scope, in.Project)
 		if existing != nil {
 			return existing, nil
 		}
 	}
 
-	// 4. Content hash for exact dedup
-	hash := contentHash(content, in.Scope, in.Project)
-
-	// 4. Check dedup — if exists, boost confidence and return
+	// 5. Check dedup — if exists, boost confidence and return
 	existing, _ := e.store.SearchNodeByHash(ctx, hash, in.Scope, in.Project)
 	if existing != nil {
 		existing.Confidence = min(existing.Confidence+0.2, 1.0)
@@ -463,7 +461,7 @@ func (e *Engine) GetMetrics() Metrics {
 // --- helpers ---
 
 func contentHash(content, scope, project string) string {
-	h := sha256.Sum256([]byte(content + "|" + scope + "|" + project))
+	h := sha256.Sum256([]byte(content + "\x00" + scope + "\x00" + project))
 	return fmt.Sprintf("%x", h)
 }
 
@@ -543,11 +541,5 @@ func score(n *storage.Node, now time.Time) float64 {
 	return n.Confidence * recency * tierBoost * (1.0 + float64(n.AccessCount)*0.1)
 }
 
-func min(a, b float64) float64 {
-	if a < b {
-		return a
-	}
-	return b
-}
 
 

@@ -91,7 +91,9 @@ func (s *Syncer) Export(ctx context.Context, project string) (string, error) {
 
 	// Write gzipped chunk
 	chunksDir := filepath.Join(s.syncDir, "chunks")
-	os.MkdirAll(chunksDir, 0755)
+	if err := os.MkdirAll(chunksDir, 0755); err != nil {
+		return "", fmt.Errorf("create chunks dir: %w", err)
+	}
 	chunkFile := filepath.Join(chunksDir, hash+".jsonl.gz")
 
 	f, err := os.Create(chunkFile)
@@ -99,9 +101,21 @@ func (s *Syncer) Export(ctx context.Context, project string) (string, error) {
 		return "", err
 	}
 	gz := gzip.NewWriter(f)
-	gz.Write(content)
-	gz.Close()
-	f.Close()
+	if _, err := gz.Write(content); err != nil {
+		gz.Close()
+		f.Close()
+		os.Remove(chunkFile)
+		return "", fmt.Errorf("write chunk: %w", err)
+	}
+	if err := gz.Close(); err != nil {
+		f.Close()
+		os.Remove(chunkFile)
+		return "", fmt.Errorf("close gzip: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(chunkFile)
+		return "", fmt.Errorf("close chunk file: %w", err)
+	}
 
 	// Update manifest
 	meta := ChunkMeta{

@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/GrayCodeAI/yaad/internal/engine"
+	"github.com/GrayCodeAI/yaad/internal/graph"
 	"github.com/GrayCodeAI/yaad/internal/storage"
 	"github.com/GrayCodeAI/yaad/internal/utils"
 	"github.com/GrayCodeAI/yaad/internal/version"
@@ -105,18 +106,23 @@ var linkCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		eng := openEngine()
 		defer eng.Store().Close()
+		edgeType := args[2]
+		if !graph.IsValidEdgeType(edgeType) {
+			fmt.Fprintf(os.Stderr, "error: invalid edge type: %q\n", edgeType)
+			os.Exit(1)
+		}
 		edge := &storage.Edge{
-			ID:     fmt.Sprintf("%s-%s-%s", utils.ShortID(args[0]), utils.ShortID(args[1]), args[2]),
+			ID:     fmt.Sprintf("%s-%s-%s", utils.ShortID(args[0]), utils.ShortID(args[1]), edgeType),
 			FromID: args[0],
 			ToID:   args[1],
-			Type:   args[2],
+			Type:   edgeType,
 			Weight: 1.0,
 		}
 		if err := eng.Graph().AddEdge(context.Background(), edge); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("✓ Linked %s →[%s]→ %s\n", utils.ShortID(args[0]), args[2], utils.ShortID(args[1]))
+		fmt.Printf("✓ Linked %s →[%s]→ %s\n", utils.ShortID(args[0]), edgeType, utils.ShortID(args[1]))
 	},
 }
 
@@ -128,6 +134,9 @@ var subgraphCmd = &cobra.Command{
 		eng := openEngine()
 		defer eng.Store().Close()
 		depth, _ := cmd.Flags().GetInt("depth")
+		if depth <= 0 || depth > 5 {
+			depth = 2
+		}
 		sg, err := eng.Graph().ExtractSubgraph(context.Background(), args[0], depth)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -150,7 +159,7 @@ var impactCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		eng := openEngine()
 		defer eng.Store().Close()
-		ids, err := eng.Graph().Impact(context.Background(), args[0], 3)
+		ids, err := eng.Graph().Impact(context.Background(), args[0], 5)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)

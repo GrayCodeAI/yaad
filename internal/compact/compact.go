@@ -4,6 +4,7 @@ package compact
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"strings"
 
@@ -73,11 +74,13 @@ func (c *Compactor) Compact(ctx context.Context, project string) (int, error) {
 		summary := buildCompactSummary(typ, contents)
 
 		// Create summary node
+		hashInput := strings.Join(ids, "\x00")
+		contentHash := fmt.Sprintf("%x", sha256.Sum256([]byte(hashInput)))
 		summaryNode := &storage.Node{
 			ID:          uuid.New().String(),
 			Type:        typ,
 			Content:     summary,
-			ContentHash: fmt.Sprintf("compact:%s:%d", typ, len(ids)),
+			ContentHash: contentHash,
 			Summary:     fmt.Sprintf("Compacted %d %s memories", len(ids), typ),
 			Scope:       group[0].Scope,
 			Project:     project,

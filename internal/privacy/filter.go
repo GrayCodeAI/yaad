@@ -12,7 +12,7 @@ var patterns = []*regexp.Regexp{
 	regexp.MustCompile(`AKIA[A-Z0-9]{16}`),                        // AWS Access Key
 	regexp.MustCompile(`gh[pousr]_[A-Za-z0-9_]{36,}`),             // GitHub tokens
 	regexp.MustCompile(`glpat-[a-zA-Z0-9_\-]{20,}`),               // GitLab PAT
-	regexp.MustCompile(`[sr]g[a-zA-Z0-9]{20,}`),                   // SendGrid
+	regexp.MustCompile(`SG\.[a-zA-Z0-9_\-]{20,}\.[a-zA-Z0-9_\-]{20,}`), // SendGrid API key
 	// JWT / tokens
 	regexp.MustCompile(`eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*`),
 	// Auth headers
@@ -23,8 +23,6 @@ var patterns = []*regexp.Regexp{
 	regexp.MustCompile(`-----BEGIN\s+\w+\s+PRIVATE\s+KEY-----[\s\S]*?-----END\s+\w+\s+PRIVATE\s+KEY-----`),
 	// Connection strings with passwords
 	regexp.MustCompile(`(?i)(postgres|mysql|mongodb)://[^\s"]+:[^\s"]+@[^\s"]+`),
-	// Generic high-entropy tokens (hex/base64 strings that look like secrets)
-	regexp.MustCompile(`[a-f0-9]{64}`), // SHA-256 hex
 }
 
 // Filter replaces secrets in content with [REDACTED].

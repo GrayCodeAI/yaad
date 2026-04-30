@@ -29,7 +29,6 @@ type SlowPathJob struct {
 	Project string
 	Eng     *engine.Engine
 	Graph   graph.Graph
-	Ctx     context.Context
 }
 
 // DualStream manages fast + slow path ingestion.
@@ -80,7 +79,8 @@ func (ds *DualStream) Remember(ctx context.Context, in engine.RememberInput) (*s
 		})
 	}
 
-	// Enqueue slow path (non-blocking)
+	// Enqueue slow path (non-blocking). Do NOT capture the request context —
+	// the background worker must outlive the HTTP handler.
 	select {
 	case ds.queue <- SlowPathJob{
 		NodeID:  node.ID,
@@ -88,7 +88,6 @@ func (ds *DualStream) Remember(ctx context.Context, in engine.RememberInput) (*s
 		Project: in.Project,
 		Eng:     ds.eng,
 		Graph:   ds.graph,
-		Ctx:     ctx,
 	}:
 	default:
 		// Queue full — skip slow path for this node (graceful degradation)
@@ -114,21 +113,8 @@ func (ds *DualStream) startWorker() {
 // No LLM calls — Yaad is a memory layer, not an LLM client.
 // The coding agent handles LLM; Yaad handles memory structure.
 func (ds *DualStream) slowPath(job SlowPathJob) {
-	// Use a detached background context with a 1-minute deadline so the
-	// slow path isn't aborted when the caller's HTTP request completes.
-	ctx := context.Background()
-	if job.Ctx != nil {
-		// Respect caller's deadline if it has one, but cap at 1 minute
-		if dl, ok := job.Ctx.Deadline(); ok {
-			if time.Until(dl) > time.Minute {
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithTimeout(context.Background(), time.Minute)
-				defer cancel()
-			} else {
-				ctx = job.Ctx
-			}
-		}
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
 	node, err := job.Eng.Store().GetNode(ctx, job.NodeID)
 	if err != nil {
 		return

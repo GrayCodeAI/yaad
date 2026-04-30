@@ -108,12 +108,12 @@ func (g *graphImpl) BFS(ctx context.Context, startID string, maxDepth int) ([]st
 	query := `
 		WITH RECURSIVE sg(id, depth) AS (
 			SELECT ?, 0
-			UNION ALL
+			UNION
 			SELECT e.to_id, sg.depth + 1
 			FROM sg
 			JOIN edges e ON e.from_id = sg.id
 			WHERE sg.depth < ? AND e.acyclic = 1
-			UNION ALL
+			UNION
 			SELECT CASE WHEN e.from_id = sg.id THEN e.to_id ELSE e.from_id END, sg.depth + 1
 			FROM sg
 			JOIN edges e ON (e.from_id = sg.id OR e.to_id = sg.id)
@@ -147,14 +147,15 @@ func (g *graphImpl) ExtractSubgraph(ctx context.Context, startID string, maxDept
 	}
 	sg := &Subgraph{}
 	nodes, err := g.store.GetNodesBatch(ctx, ids)
-	if err == nil {
-		sg.Nodes = nodes
+	if err != nil {
+		return nil, fmt.Errorf("get nodes batch: %w", err)
 	}
-	// Collect edges between subgraph nodes (single batched query, no N+1)
+	sg.Nodes = nodes
 	edges, err := g.store.GetEdgesBetween(ctx, ids)
-	if err == nil {
-		sg.Edges = edges
+	if err != nil {
+		return nil, fmt.Errorf("get edges between: %w", err)
 	}
+	sg.Edges = edges
 	return sg, nil
 }
 
@@ -163,7 +164,7 @@ func (g *graphImpl) Ancestors(ctx context.Context, id string) ([]string, error) 
 	query := `
 		WITH RECURSIVE anc(id) AS (
 			SELECT ?
-			UNION ALL
+			UNION
 			SELECT e.from_id FROM anc a
 			JOIN edges e ON e.to_id = a.id AND e.acyclic = 1
 		)
@@ -189,7 +190,7 @@ func (g *graphImpl) Descendants(ctx context.Context, id string) ([]string, error
 	query := `
 		WITH RECURSIVE desc(id) AS (
 			SELECT ?
-			UNION ALL
+			UNION
 			SELECT e.to_id FROM desc d
 			JOIN edges e ON e.from_id = d.id AND e.acyclic = 1
 		)
@@ -246,7 +247,9 @@ func (g *graphImpl) IntentBFS(ctx context.Context, startID string, maxDepth int,
 		if err != nil {
 			continue
 		}
-		allEdges := append(edges, edgesTo...)
+		allEdges := make([]*storage.Edge, 0, len(edges)+len(edgesTo))
+		allEdges = append(allEdges, edges...)
+		allEdges = append(allEdges, edgesTo...)
 
 		// Score and sort neighbors by intent weight
 		type scored struct {
@@ -288,7 +291,7 @@ func (g *graphImpl) Impact(ctx context.Context, filePath string, maxDepth int) (
 	query := `
 		WITH RECURSIVE affected(id, depth) AS (
 			SELECT node_id, 0 FROM file_watch WHERE file_path = ?
-			UNION ALL
+			UNION
 			SELECT e.from_id, a.depth + 1
 			FROM affected a
 			JOIN edges e ON e.to_id = a.id

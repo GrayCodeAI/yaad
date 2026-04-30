@@ -21,6 +21,7 @@ type AccessTracker struct {
 	mu        sync.Mutex
 	flushTick *time.Ticker
 	stopCh    chan struct{}
+	stopped   sync.Once
 }
 
 // NewAccessTracker creates a tracker that flushes every interval.
@@ -72,10 +73,12 @@ func (at *AccessTracker) Flush(ctx context.Context) {
 	}
 }
 
-// Stop halts the background flusher.
+// Stop halts the background flusher. Safe to call multiple times.
 func (at *AccessTracker) Stop() {
-	at.flushTick.Stop()
-	close(at.stopCh)
+	at.stopped.Do(func() {
+		at.flushTick.Stop()
+		close(at.stopCh)
+	})
 }
 
 func (at *AccessTracker) loop() {

@@ -127,6 +127,9 @@ func (s *GRPCServer) grpcRemember(_ interface{}, ctx context.Context, dec func(i
 	if err := dec(&in); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
+	if in.Type != "" && !engine.IsValidNodeType(in.Type) {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid node type: %q", in.Type)
+	}
 	node, err := s.eng.Remember(ctx, in)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
@@ -179,6 +182,12 @@ func (s *GRPCServer) grpcLink(_ interface{}, ctx context.Context, dec func(inter
 	if err := dec(&req); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
+	if req.Type == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "edge type is required")
+	}
+	if !graph.IsValidEdgeType(req.Type) {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid edge type: %q", req.Type)
+	}
 	edge := &storage.Edge{
 		ID: uuid.New().String(), FromID: req.FromID, ToID: req.ToID, Type: req.Type, Weight: 1.0,
 	}
@@ -210,6 +219,9 @@ func (s *GRPCServer) grpcSubgraph(_ interface{}, ctx context.Context, dec func(i
 	if req.Depth == 0 {
 		req.Depth = 2
 	}
+	if req.Depth > maxGraphDepth {
+		return nil, status.Errorf(codes.InvalidArgument, "depth exceeds maximum of %d", maxGraphDepth)
+	}
 	sg, err := s.eng.Graph().ExtractSubgraph(ctx, req.ID, req.Depth)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
@@ -227,6 +239,9 @@ func (s *GRPCServer) grpcImpact(_ interface{}, ctx context.Context, dec func(int
 	}
 	if req.Depth == 0 {
 		req.Depth = 3
+	}
+	if req.Depth > maxGraphDepth {
+		return nil, status.Errorf(codes.InvalidArgument, "depth exceeds maximum of %d", maxGraphDepth)
 	}
 	ids, err := s.eng.Graph().Impact(ctx, req.File, req.Depth)
 	if err != nil {
@@ -249,11 +264,17 @@ func (s *GRPCServer) grpcSessionStart(_ interface{}, ctx context.Context, dec fu
 	if err := dec(&req); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
+	sessID, err := s.eng.StartSession(ctx, req.Project, req.Agent)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "create session: %v", err)
+	}
 	result, err := s.eng.Context(ctx, req.Project)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
-	return recallToGRPC(result), nil
+	resp := recallToGRPC(result)
+	resp["session_id"] = sessID
+	return resp, nil
 }
 
 func (s *GRPCServer) grpcSessionEnd(_ interface{}, ctx context.Context, dec func(interface{}) error, _ grpc.UnaryServerInterceptor) (interface{}, error) {

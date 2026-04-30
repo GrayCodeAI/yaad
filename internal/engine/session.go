@@ -17,15 +17,18 @@ func (e *Engine) CompressSession(ctx context.Context, sessionID, project string)
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	// Get all nodes created in this session
-	nodes, err := e.store.ListNodes(ctx, storage.NodeFilter{Project: project})
+	// Get nodes created in this session (filtered at SQL level)
+	nodes, err := e.store.ListNodes(ctx, storage.NodeFilter{
+		Project:       project,
+		SourceSession: sessionID,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("list nodes: %w", err)
 	}
 
 	var sessionNodes []*storage.Node
 	for _, n := range nodes {
-		if n.SourceSession == sessionID && n.Type != "session" {
+		if n.Type != "session" {
 			sessionNodes = append(sessionNodes, n)
 		}
 	}

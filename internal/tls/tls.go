@@ -75,7 +75,7 @@ func generateSelfSigned(certFile, keyFile string) error {
 	defer cf.Close()
 	pem.Encode(cf, &pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 
-	kf, err := os.Create(keyFile)
+	kf, err := os.OpenFile(keyFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}

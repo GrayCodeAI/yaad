@@ -151,12 +151,6 @@ func dedup(items []string) []string {
 	return out
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
 
 // ensure sort is used
 var _ = sort.Strings

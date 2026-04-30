@@ -15,8 +15,10 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 )
 
 // GenerateKey creates a new 256-bit encryption key.
@@ -29,10 +31,14 @@ func GenerateKey() (string, error) {
 }
 
 // EncryptFile encrypts a file in-place using AES-256-GCM.
+// Uses atomic write (temp file + rename) to prevent data loss on crash.
 func EncryptFile(path, keyBase64 string) error {
 	key, err := base64.StdEncoding.DecodeString(keyBase64)
 	if err != nil {
 		return err
+	}
+	if len(key) != 32 {
+		return fmt.Errorf("key must be 32 bytes (AES-256), got %d", len(key))
 	}
 	plaintext, err := os.ReadFile(path)
 	if err != nil {
@@ -51,14 +57,18 @@ func EncryptFile(path, keyBase64 string) error {
 		return err
 	}
 	ciphertext := gcm.Seal(nonce, nonce, plaintext, nil)
-	return os.WriteFile(path, ciphertext, 0600)
+	return atomicWriteFile(path, ciphertext, 0600)
 }
 
 // DecryptFile decrypts a file in-place using AES-256-GCM.
+// Uses atomic write (temp file + rename) to prevent data loss on crash.
 func DecryptFile(path, keyBase64 string) error {
 	key, err := base64.StdEncoding.DecodeString(keyBase64)
 	if err != nil {
 		return err
+	}
+	if len(key) != 32 {
+		return fmt.Errorf("key must be 32 bytes (AES-256), got %d", len(key))
 	}
 	ciphertext, err := os.ReadFile(path)
 	if err != nil {
@@ -74,14 +84,14 @@ func DecryptFile(path, keyBase64 string) error {
 	}
 	nonceSize := gcm.NonceSize()
 	if len(ciphertext) < nonceSize {
-		return os.ErrInvalid
+		return fmt.Errorf("ciphertext too short: %d bytes, need at least %d", len(ciphertext), nonceSize)
 	}
 	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, plaintext, 0600)
+	return atomicWriteFile(path, plaintext, 0600)
 }
 
 // IsEncrypted checks if a file appears to be encrypted (not valid SQLite header).
@@ -98,4 +108,39 @@ func IsEncrypted(path string) bool {
 	}
 	// SQLite files start with "SQLite format 3\000"
 	return string(header[:6]) != "SQLite"
+}
+
+// atomicWriteFile writes data to a temp file in the same directory then renames
+// it to the target path. This prevents data loss if the process crashes mid-write.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".yaad-encrypt-*")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("close temp file: %w", err)
+	}
+	if err := os.Chmod(tmpPath, perm); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+	return nil
 }

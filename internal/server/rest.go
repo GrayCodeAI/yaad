@@ -36,6 +36,7 @@ type RESTServer struct {
 	embedder embeddings.Provider // nil = no vector search
 	SSE      *SSEBroker
 	srv      *http.Server
+	limiter  *RateLimiter
 }
 
 // NewRESTServer creates a REST server.
@@ -59,13 +60,21 @@ func (s *RESTServer) WithTLS(cfg *stdtls.Config) *RESTServer {
 func (s *RESTServer) ListenAndServe() error {
 	mux := http.NewServeMux()
 	s.RegisterRoutes(mux)
-	wrapped := s.withMiddleware(s.withRateLimit(mux))
+	rateLimited := s.withRateLimit(mux)
+	// Exclude SSE from TimeoutHandler — SSE connections are long-lived
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/yaad/events" {
+			s.withMiddleware(rateLimited).ServeHTTP(w, r)
+			return
+		}
+		http.TimeoutHandler(s.withMiddleware(rateLimited), 30*time.Second, `{"error":"request timeout"}`).ServeHTTP(w, r)
+	})
 	s.srv = &http.Server{
 		Addr:         s.addr,
-		Handler:      http.TimeoutHandler(wrapped, 30*time.Second, `{"error":"request timeout"}`),
+		Handler:      handler,
 		TLSConfig:    s.tlsCfg,
 		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		WriteTimeout: 0, // SSE requires no write timeout; per-request timeouts handle non-SSE
 		IdleTimeout:  120 * time.Second,
 	}
 	if s.tlsCfg != nil {
@@ -82,6 +91,9 @@ func (s *RESTServer) ListenAndServe() error {
 
 // Shutdown gracefully shuts down the REST server with a timeout.
 func (s *RESTServer) Shutdown(ctx context.Context) error {
+	if s.limiter != nil {
+		s.limiter.Stop()
+	}
 	if s.srv == nil {
 		return nil
 	}

@@ -58,6 +58,9 @@ func ListTeamMemories(ctx context.Context, store storage.Storage, teamID string)
 	for _, n := range all {
 		if containsTag(n.Tags, tag) {
 			result = append(result, n)
+			if len(result) >= 1000 {
+				break
+			}
 		}
 	}
 	return result, nil

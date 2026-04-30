@@ -27,11 +27,12 @@ func ExportJSON(ctx context.Context, store storage.Storage, project string) ([]b
 	if err != nil {
 		return nil, err
 	}
-	var edges []*storage.Edge
-	for _, n := range nodes {
-		e, _ := store.GetEdgesFrom(ctx, n.ID)
-		edges = append(edges, e...)
+	// Batch-fetch all edges between project nodes (single query instead of N+1)
+	nodeIDs := make([]string, len(nodes))
+	for i, n := range nodes {
+		nodeIDs[i] = n.ID
 	}
+	edges, _ := store.GetEdgesBetween(ctx, nodeIDs)
 	return json.MarshalIndent(GraphExport{
 		Version:    "1.0",
 		ExportedAt: time.Now(),
@@ -102,8 +103,19 @@ func ExportMarkdown(ctx context.Context, store storage.Storage, project string) 
 }
 
 // ExportObsidian exports the graph as an Obsidian vault (one .md file per node, wikilinks for edges).
+// vaultDir must be an absolute path and must not escape above itself via ".." components.
 func ExportObsidian(ctx context.Context, store storage.Storage, project, vaultDir string) (int, error) {
-	os.MkdirAll(vaultDir, 0755)
+	cleaned := filepath.Clean(vaultDir)
+	if !filepath.IsAbs(cleaned) {
+		return 0, fmt.Errorf("vault_dir must be an absolute path, got: %q", vaultDir)
+	}
+	if strings.Contains(cleaned, "..") {
+		return 0, fmt.Errorf("vault_dir must not contain path traversal components")
+	}
+	if err := os.MkdirAll(cleaned, 0755); err != nil {
+		return 0, fmt.Errorf("create vault dir: %w", err)
+	}
+	vaultDir = cleaned
 
 	nodes, err := store.ListNodes(ctx, storage.NodeFilter{Project: project})
 	if err != nil {

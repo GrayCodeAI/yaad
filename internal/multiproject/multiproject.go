@@ -3,6 +3,7 @@ package multiproject
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -12,13 +13,18 @@ import (
 // LinkProjects creates a cross-project edge between two nodes in different stores.
 // The edge is stored in the global store (dst) as a relates_to edge.
 func LinkProjects(ctx context.Context, globalStore *storage.Store, nodeA, projectA, nodeB, projectB string) error {
+	meta, _ := json.Marshal(map[string]any{
+		"cross_project": true,
+		"project_a":     projectA,
+		"project_b":     projectB,
+	})
 	edge := &storage.Edge{
-		ID:     uuid.New().String(),
-		FromID: nodeA,
-		ToID:   nodeB,
-		Type:   "relates_to",
-		Weight: 1.0,
-		Metadata: `{"cross_project":true,"project_a":"` + projectA + `","project_b":"` + projectB + `"}`,
+		ID:       uuid.New().String(),
+		FromID:   nodeA,
+		ToID:     nodeB,
+		Type:     "relates_to",
+		Weight:   1.0,
+		Metadata: string(meta),
 	}
 	return globalStore.CreateEdge(ctx, edge)
 }

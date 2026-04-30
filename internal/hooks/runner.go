@@ -52,11 +52,15 @@ func New(eng *engine.Engine, project string) *Runner {
 }
 
 // ReadInput reads HookInput from stdin (agents pipe JSON to hooks).
+// Returns an empty HookInput if the reader is empty or contains no JSON.
 func ReadInput(r io.Reader) (*HookInput, error) {
 	var in HookInput
-	if err := json.NewDecoder(r).Decode(&in); err != nil {
-		// Not all hooks send JSON — treat as empty input
+	dec := json.NewDecoder(r)
+	if !dec.More() {
 		return &in, nil
+	}
+	if err := dec.Decode(&in); err != nil {
+		return &in, fmt.Errorf("decode hook input: %w", err)
 	}
 	return &in, nil
 }

@@ -33,6 +33,9 @@ func RunDecay(ctx context.Context, store storage.Storage, cfg DecayConfig) error
 	}
 	now := time.Now()
 	for _, n := range nodes {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if n.Confidence <= 0 {
 			continue // already archived
 		}
@@ -46,14 +49,14 @@ func RunDecay(ctx context.Context, store storage.Storage, cfg DecayConfig) error
 		}
 
 		multiplier := 1.0
-		// Orphan nodes decay 2× faster
-		edges, _ := store.GetEdgesFrom(ctx, n.ID)
-		edgesTo, _ := store.GetEdgesTo(ctx, n.ID)
-		if len(edges)+len(edgesTo) == 0 {
+		// Orphan nodes decay 2× faster — use CountEdges (returns counts, no full edge load)
+		inbound, outbound, _ := store.CountEdges(ctx, n.ID)
+		if inbound+outbound == 0 {
 			multiplier = 2.0
 		}
-		// Superseded nodes decay 2× faster
-		if n.Type == "bug" || n.Type == "decision" {
+		// Superseded nodes decay 2× faster (only check edge types for relevant node types)
+		if multiplier == 1.0 && (n.Type == "bug" || n.Type == "decision") {
+			edges, _ := store.GetEdgesFrom(ctx, n.ID)
 			for _, e := range edges {
 				if e.Type == "supersedes" {
 					multiplier = 2.0
@@ -64,7 +67,11 @@ func RunDecay(ctx context.Context, store storage.Storage, cfg DecayConfig) error
 
 		// Half-life formula: confidence *= 0.5^(days / half_life * multiplier)
 		decay := math.Pow(0.5, days/cfg.HalfLifeDays*multiplier)
-		n.Confidence = math.Max(n.Confidence*decay, 0)
+		newConf := math.Max(n.Confidence*decay, 0)
+		if newConf == n.Confidence {
+			continue // no change, skip write
+		}
+		n.Confidence = newConf
 		if err := store.UpdateNode(ctx, n); err != nil {
 			return err
 		}

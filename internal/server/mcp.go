@@ -175,10 +175,18 @@ func (s *MCPServer) handleRemember(ctx context.Context, req mcp.CallToolRequest)
 }
 
 func (s *MCPServer) handleRecall(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	depth := intArgOr(req, "depth", 2)
+	if depth <= 0 || depth > 5 {
+		depth = 2
+	}
+	limit := intArgOr(req, "limit", 10)
+	if limit <= 0 || limit > 100 {
+		limit = 10
+	}
 	result, err := s.eng.Recall(ctx, engine.RecallOpts{
 		Query:   strArg(req, "query"),
-		Depth:   intArgOr(req, "depth", 2),
-		Limit:   intArgOr(req, "limit", 10),
+		Depth:   depth,
+		Limit:   limit,
 		Type:    strArg(req, "type"),
 		Project: strArg(req, "project"),
 	})
@@ -232,7 +240,11 @@ func (s *MCPServer) handleUnlink(ctx context.Context, req mcp.CallToolRequest) (
 }
 
 func (s *MCPServer) handleSubgraph(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	sg, err := s.eng.Graph().ExtractSubgraph(ctx, strArg(req, "id"), intArgOr(req, "depth", 2))
+	depth := intArgOr(req, "depth", 2)
+	if depth <= 0 || depth > 5 {
+		depth = 2
+	}
+	sg, err := s.eng.Graph().ExtractSubgraph(ctx, strArg(req, "id"), depth)
 	if err != nil {
 		return nil, err
 	}
@@ -240,7 +252,11 @@ func (s *MCPServer) handleSubgraph(ctx context.Context, req mcp.CallToolRequest)
 }
 
 func (s *MCPServer) handleImpact(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	ids, err := s.eng.Graph().Impact(ctx, strArg(req, "file"), intArgOr(req, "depth", 3))
+	depth := intArgOr(req, "depth", 3)
+	if depth <= 0 || depth > 5 {
+		depth = 3
+	}
+	ids, err := s.eng.Graph().Impact(ctx, strArg(req, "file"), depth)
 	if err != nil {
 		return nil, err
 	}

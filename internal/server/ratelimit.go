@@ -14,6 +14,7 @@ type RateLimiter struct {
 	buckets  map[string]*bucket
 	rate     float64 // tokens per second
 	capacity int     // max burst
+	stopCh   chan struct{}
 }
 
 type bucket struct {
@@ -22,11 +23,37 @@ type bucket struct {
 }
 
 // NewRateLimiter creates a limiter with the given rate (req/sec) and burst capacity.
+// Call Stop() when the limiter is no longer needed.
 func NewRateLimiter(rate float64, capacity int) *RateLimiter {
-	return &RateLimiter{
+	rl := &RateLimiter{
 		buckets:  make(map[string]*bucket),
 		rate:     rate,
 		capacity: capacity,
+		stopCh:   make(chan struct{}),
+	}
+	go rl.cleanupLoop()
+	return rl
+}
+
+func (rl *RateLimiter) cleanupLoop() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			rl.Cleanup(10 * time.Minute)
+		case <-rl.stopCh:
+			return
+		}
+	}
+}
+
+// Stop halts the background cleanup goroutine.
+func (rl *RateLimiter) Stop() {
+	select {
+	case <-rl.stopCh:
+	default:
+		close(rl.stopCh)
 	}
 }
 
@@ -65,21 +92,9 @@ func (rl *RateLimiter) Cleanup(maxAge time.Duration) {
 	}
 }
 
-func min(a, b float64) float64 {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-// clientIP extracts the client IP from a request, preferring X-Forwarded-For.
+// clientIP extracts the client IP from the request's RemoteAddr.
+// X-Forwarded-For is intentionally ignored to prevent rate-limit bypass via header spoofing.
 func clientIP(r *http.Request) string {
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		if host, _, err := net.SplitHostPort(fwd); err == nil {
-			return host
-		}
-		return fwd
-	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
@@ -89,16 +104,11 @@ func clientIP(r *http.Request) string {
 
 // withRateLimit wraps the handler with per-IP rate limiting.
 func (s *RESTServer) withRateLimit(next http.Handler) http.Handler {
-	// Default: 30 req/sec burst, 10 req/sec sustained
-	rl := NewRateLimiter(10, 30)
-	cleanupTicker := time.NewTicker(5 * time.Minute)
-	go func() {
-		for range cleanupTicker.C {
-			rl.Cleanup(10 * time.Minute)
-		}
-	}()
+	if s.limiter == nil {
+		s.limiter = NewRateLimiter(10, 30)
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !rl.Allow(clientIP(r)) {
+		if !s.limiter.Allow(clientIP(r)) {
 			httpErr(w, fmt.Errorf("rate limit exceeded"), 429)
 			return
 		}

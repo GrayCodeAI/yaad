@@ -11,6 +11,7 @@ type Storage interface {
 	// Nodes
 	CreateNode(ctx context.Context, n *Node) error
 	GetNode(ctx context.Context, id string) (*Node, error)
+	GetNodeByKey(ctx context.Context, key, project string) (*Node, error)
 	GetNodesBatch(ctx context.Context, ids []string) ([]*Node, error)
 	UpdateNode(ctx context.Context, n *Node) error
 	DeleteNode(ctx context.Context, id string) error
@@ -22,6 +23,7 @@ type Storage interface {
 	// Edges
 	CreateEdge(ctx context.Context, e *Edge) error
 	GetEdge(ctx context.Context, id string) (*Edge, error)
+	InvalidateEdge(ctx context.Context, id string) error // non-destructive: sets invalid_at = now
 	DeleteEdge(ctx context.Context, id string) error
 	GetEdgesFrom(ctx context.Context, nodeID string) ([]*Edge, error)
 	GetEdgesTo(ctx context.Context, nodeID string) ([]*Edge, error)

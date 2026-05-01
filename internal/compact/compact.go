@@ -12,17 +12,37 @@ import (
 	"github.com/GrayCodeAI/yaad/internal/storage"
 )
 
+// Summarizer generates a summary from a list of content strings.
+// Default: naive list. Consumers (e.g., Hawk) can inject an LLM-backed implementation.
+type Summarizer interface {
+	Summarize(ctx context.Context, typ string, contents []string) (string, error)
+}
+
+// DefaultSummarizer is the built-in, no-LLM summarizer.
+type DefaultSummarizer struct{}
+
+func (DefaultSummarizer) Summarize(_ context.Context, typ string, contents []string) (string, error) {
+	return buildCompactSummary(typ, contents), nil
+}
+
 // Compactor summarizes old, low-confidence memories to keep the graph lean.
 type Compactor struct {
-	store     storage.Storage
-	maxTokens int // max total tokens before compaction triggers
+	store      storage.Storage
+	maxTokens  int
+	summarizer Summarizer
 }
 
 func New(store storage.Storage, maxTokens int) *Compactor {
 	if maxTokens <= 0 {
-		maxTokens = 50000 // ~200KB of content
+		maxTokens = 50000
 	}
-	return &Compactor{store: store, maxTokens: maxTokens}
+	return &Compactor{store: store, maxTokens: maxTokens, summarizer: DefaultSummarizer{}}
+}
+
+// WithSummarizer sets a custom summarizer (e.g., LLM-backed).
+func (c *Compactor) WithSummarizer(s Summarizer) *Compactor {
+	c.summarizer = s
+	return c
 }
 
 // NeedsCompaction returns true if total content exceeds the token budget.
@@ -71,7 +91,10 @@ func (c *Compactor) Compact(ctx context.Context, project string) (int, error) {
 			ids = append(ids, n.ID)
 		}
 
-		summary := buildCompactSummary(typ, contents)
+		summary, err := c.summarizer.Summarize(ctx, typ, contents)
+		if err != nil {
+			continue
+		}
 
 		// Create summary node
 		hashInput := strings.Join(ids, "\x00")

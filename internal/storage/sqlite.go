@@ -16,6 +16,8 @@ import (
 // Node represents a memory node in the Yaad graph.
 type Node struct {
 	ID, Type, Content, ContentHash, Summary, Scope, Project, Tags string
+	Key                                                           string // optional unique key per project (upsert semantics)
+	Pinned                                                        bool   // pinned nodes always appear in context
 	Tier                                                          int
 	Confidence                                                    float64
 	AccessCount                                                   int
@@ -29,6 +31,8 @@ type Edge struct {
 	ID, FromID, ToID, Type, Metadata string
 	Acyclic                          bool
 	Weight                           float64
+	ValidAt                          time.Time // when the fact became true (zero = since creation)
+	InvalidAt                        time.Time // when the fact stopped being true (zero = still valid)
 	CreatedAt                        time.Time
 }
 
@@ -51,6 +55,7 @@ type NodeFilter struct {
 	Tier                 int
 	MinConfidence        float64
 	SourceSession        string
+	Pinned               *bool // filter by pinned status (nil = no filter)
 }
 
 // Store
@@ -93,14 +98,15 @@ func (s *Store) Close() error { return s.db.Close() }
 // SearchNodeByHash finds a node by content hash + scope + project (dedup check).
 func (s *Store) SearchNodeByHash(ctx context.Context, hash, scope, project string) (*Node, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id,type,content,content_hash,summary,scope,project,tier,tags,confidence,
+		`SELECT id,type,content,content_hash,summary,scope,project,tier,tags,key,pinned,confidence,
 		access_count,created_at,updated_at,accessed_at,source_session,source_agent,version
 		FROM nodes WHERE content_hash=? AND scope=? AND (project=? OR project IS NULL) LIMIT 1`,
 		hash, scope, project)
 	n := &Node{}
 	var at sql.NullTime
+	var key sql.NullString
 	err := row.Scan(&n.ID, &n.Type, &n.Content, &n.ContentHash, &n.Summary, &n.Scope, &n.Project,
-		&n.Tier, &n.Tags, &n.Confidence, &n.AccessCount, &n.CreatedAt, &n.UpdatedAt, &at,
+		&n.Tier, &n.Tags, &key, &n.Pinned, &n.Confidence, &n.AccessCount, &n.CreatedAt, &n.UpdatedAt, &at,
 		&n.SourceSession, &n.SourceAgent, &n.Version)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -110,6 +116,9 @@ func (s *Store) SearchNodeByHash(ctx context.Context, hash, scope, project strin
 	}
 	if at.Valid {
 		n.AccessedAt = at.Time
+	}
+	if key.Valid {
+		n.Key = key.String
 	}
 	return n, nil
 }
@@ -130,6 +139,8 @@ CREATE TABLE IF NOT EXISTS nodes (
   project TEXT,
   tier INTEGER DEFAULT 2,
   tags TEXT,
+  key TEXT,
+  pinned BOOLEAN DEFAULT 0,
   confidence REAL DEFAULT 1.0,
   access_count INTEGER DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -140,9 +151,11 @@ CREATE TABLE IF NOT EXISTS nodes (
   version INTEGER DEFAULT 1
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_hash ON nodes(content_hash, scope, project);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_key ON nodes(key, project) WHERE key IS NOT NULL AND key != '';
 CREATE INDEX IF NOT EXISTS idx_nodes_project ON nodes(project);
 CREATE INDEX IF NOT EXISTS idx_nodes_project_type ON nodes(project, type);
 CREATE INDEX IF NOT EXISTS idx_nodes_tier ON nodes(tier);
+CREATE INDEX IF NOT EXISTS idx_nodes_pinned ON nodes(pinned) WHERE pinned = 1;
 CREATE INDEX IF NOT EXISTS idx_nodes_confidence ON nodes(confidence);
 CREATE INDEX IF NOT EXISTS idx_nodes_accessed ON nodes(accessed_at);
 
@@ -154,6 +167,8 @@ CREATE TABLE IF NOT EXISTS edges (
   acyclic BOOLEAN NOT NULL,
   weight REAL DEFAULT 1.0,
   metadata TEXT,
+  valid_at DATETIME,
+  invalid_at DATETIME,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (from_id) REFERENCES nodes(id),
   FOREIGN KEY (to_id) REFERENCES nodes(id)
@@ -162,6 +177,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_unique ON edges(from_id, to_id, type
 CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_id);
 CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_id);
 CREATE INDEX IF NOT EXISTS idx_edges_acyclic ON edges(acyclic, from_id, to_id);
+CREATE INDEX IF NOT EXISTS idx_edges_validity ON edges(valid_at, invalid_at);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(content, summary, tags, content=nodes, content_rowid=rowid);
 
@@ -230,9 +246,9 @@ END;
 // --- Nodes ---
 
 func (s *Store) CreateNode(ctx context.Context, n *Node) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO nodes (id, type, content, content_hash, summary, scope, project, tier, tags, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		n.ID, n.Type, n.Content, n.ContentHash, n.Summary, n.Scope, n.Project, n.Tier, n.Tags, n.Confidence, n.AccessCount,
+	_, err := s.db.ExecContext(ctx, `INSERT INTO nodes (id, type, content, content_hash, summary, scope, project, tier, tags, key, pinned, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		n.ID, n.Type, n.Content, n.ContentHash, n.Summary, n.Scope, n.Project, n.Tier, n.Tags, nullString(n.Key), n.Pinned, n.Confidence, n.AccessCount,
 		n.CreatedAt, n.UpdatedAt, nullTime(n.AccessedAt), n.SourceSession, n.SourceAgent, n.Version)
 	if err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed") {
 		return fmt.Errorf("%w: %s", ErrDuplicateNode, err)
@@ -243,8 +259,9 @@ func (s *Store) CreateNode(ctx context.Context, n *Node) error {
 func (s *Store) GetNode(ctx context.Context, id string) (*Node, error) {
 	n := &Node{}
 	var accessedAt sql.NullTime
-	err := s.db.QueryRowContext(ctx, `SELECT id, type, content, content_hash, summary, scope, project, tier, tags, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version FROM nodes WHERE id = ?`, id).
-		Scan(&n.ID, &n.Type, &n.Content, &n.ContentHash, &n.Summary, &n.Scope, &n.Project, &n.Tier, &n.Tags, &n.Confidence, &n.AccessCount, &n.CreatedAt, &n.UpdatedAt, &accessedAt, &n.SourceSession, &n.SourceAgent, &n.Version)
+	var key sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT id, type, content, content_hash, summary, scope, project, tier, tags, key, pinned, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version FROM nodes WHERE id = ?`, id).
+		Scan(&n.ID, &n.Type, &n.Content, &n.ContentHash, &n.Summary, &n.Scope, &n.Project, &n.Tier, &n.Tags, &key, &n.Pinned, &n.Confidence, &n.AccessCount, &n.CreatedAt, &n.UpdatedAt, &accessedAt, &n.SourceSession, &n.SourceAgent, &n.Version)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("%w: %s", ErrNodeNotFound, id)
@@ -254,12 +271,36 @@ func (s *Store) GetNode(ctx context.Context, id string) (*Node, error) {
 	if accessedAt.Valid {
 		n.AccessedAt = accessedAt.Time
 	}
+	if key.Valid {
+		n.Key = key.String
+	}
+	return n, nil
+}
+
+func (s *Store) GetNodeByKey(ctx context.Context, key, project string) (*Node, error) {
+	n := &Node{}
+	var accessedAt sql.NullTime
+	var k sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT id, type, content, content_hash, summary, scope, project, tier, tags, key, pinned, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version FROM nodes WHERE key = ? AND project = ?`, key, project).
+		Scan(&n.ID, &n.Type, &n.Content, &n.ContentHash, &n.Summary, &n.Scope, &n.Project, &n.Tier, &n.Tags, &k, &n.Pinned, &n.Confidence, &n.AccessCount, &n.CreatedAt, &n.UpdatedAt, &accessedAt, &n.SourceSession, &n.SourceAgent, &n.Version)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if accessedAt.Valid {
+		n.AccessedAt = accessedAt.Time
+	}
+	if k.Valid {
+		n.Key = k.String
+	}
 	return n, nil
 }
 
 func (s *Store) UpdateNode(ctx context.Context, n *Node) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE nodes SET type=?, content=?, content_hash=?, summary=?, scope=?, project=?, tier=?, tags=?, confidence=?, access_count=?, updated_at=?, accessed_at=?, source_session=?, source_agent=?, version=? WHERE id=?`,
-		n.Type, n.Content, n.ContentHash, n.Summary, n.Scope, n.Project, n.Tier, n.Tags, n.Confidence, n.AccessCount,
+	_, err := s.db.ExecContext(ctx, `UPDATE nodes SET type=?, content=?, content_hash=?, summary=?, scope=?, project=?, tier=?, tags=?, key=?, pinned=?, confidence=?, access_count=?, updated_at=?, accessed_at=?, source_session=?, source_agent=?, version=? WHERE id=?`,
+		n.Type, n.Content, n.ContentHash, n.Summary, n.Scope, n.Project, n.Tier, n.Tags, nullString(n.Key), n.Pinned, n.Confidence, n.AccessCount,
 		n.UpdatedAt, nullTime(n.AccessedAt), n.SourceSession, n.SourceAgent, n.Version, n.ID)
 	return err
 }
@@ -280,7 +321,7 @@ func (s *Store) DeleteNode(ctx context.Context, id string) error {
 }
 
 func (s *Store) ListNodes(ctx context.Context, f NodeFilter) ([]*Node, error) {
-	q := "SELECT id, type, content, content_hash, summary, scope, project, tier, tags, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version FROM nodes WHERE 1=1"
+	q := "SELECT id, type, content, content_hash, summary, scope, project, tier, tags, key, pinned, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version FROM nodes WHERE 1=1"
 	var args []any
 	if f.Type != "" {
 		q += " AND type=?"
@@ -305,6 +346,10 @@ func (s *Store) ListNodes(ctx context.Context, f NodeFilter) ([]*Node, error) {
 	if f.SourceSession != "" {
 		q += " AND source_session=?"
 		args = append(args, f.SourceSession)
+	}
+	if f.Pinned != nil {
+		q += " AND pinned=?"
+		args = append(args, *f.Pinned)
 	}
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -332,7 +377,7 @@ func (s *Store) SearchNodes(ctx context.Context, query string, limit int) ([]*No
 		limit = 10
 	}
 	ftsQuery := escapeFTS5(query)
-	rows, err := s.db.QueryContext(ctx, `SELECT n.id, n.type, n.content, n.content_hash, n.summary, n.scope, n.project, n.tier, n.tags, n.confidence, n.access_count, n.created_at, n.updated_at, n.accessed_at, n.source_session, n.source_agent, n.version
+	rows, err := s.db.QueryContext(ctx, `SELECT n.id, n.type, n.content, n.content_hash, n.summary, n.scope, n.project, n.tier, n.tags, n.key, n.pinned, n.confidence, n.access_count, n.created_at, n.updated_at, n.accessed_at, n.source_session, n.source_agent, n.version
 		FROM nodes_fts f JOIN nodes n ON f.rowid = n.rowid WHERE nodes_fts MATCH ? ORDER BY rank LIMIT ?`, ftsQuery, limit)
 	if err != nil {
 		return nil, err
@@ -344,8 +389,8 @@ func (s *Store) SearchNodes(ctx context.Context, query string, limit int) ([]*No
 // --- Edges ---
 
 func (s *Store) CreateEdge(ctx context.Context, e *Edge) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO edges (id, from_id, to_id, type, acyclic, weight, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		e.ID, e.FromID, e.ToID, e.Type, e.Acyclic, e.Weight, e.Metadata, e.CreatedAt)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO edges (id, from_id, to_id, type, acyclic, weight, metadata, valid_at, invalid_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		e.ID, e.FromID, e.ToID, e.Type, e.Acyclic, e.Weight, e.Metadata, nullTime(e.ValidAt), nullTime(e.InvalidAt), e.CreatedAt)
 	if err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed") {
 		return fmt.Errorf("%w: %s", ErrDuplicateEdge, err)
 	}
@@ -354,15 +399,27 @@ func (s *Store) CreateEdge(ctx context.Context, e *Edge) error {
 
 func (s *Store) GetEdge(ctx context.Context, id string) (*Edge, error) {
 	e := &Edge{}
-	err := s.db.QueryRowContext(ctx, `SELECT id, from_id, to_id, type, acyclic, weight, metadata, created_at FROM edges WHERE id=?`, id).
-		Scan(&e.ID, &e.FromID, &e.ToID, &e.Type, &e.Acyclic, &e.Weight, &e.Metadata, &e.CreatedAt)
+	var validAt, invalidAt sql.NullTime
+	err := s.db.QueryRowContext(ctx, `SELECT id, from_id, to_id, type, acyclic, weight, metadata, valid_at, invalid_at, created_at FROM edges WHERE id=?`, id).
+		Scan(&e.ID, &e.FromID, &e.ToID, &e.Type, &e.Acyclic, &e.Weight, &e.Metadata, &validAt, &invalidAt, &e.CreatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("%w: %s", ErrEdgeNotFound, id)
 		}
 		return nil, err
 	}
+	if validAt.Valid {
+		e.ValidAt = validAt.Time
+	}
+	if invalidAt.Valid {
+		e.InvalidAt = invalidAt.Time
+	}
 	return e, nil
+}
+
+func (s *Store) InvalidateEdge(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE edges SET invalid_at = ? WHERE id = ?`, time.Now(), id)
+	return err
 }
 
 func (s *Store) DeleteEdge(ctx context.Context, id string) error {
@@ -371,11 +428,11 @@ func (s *Store) DeleteEdge(ctx context.Context, id string) error {
 }
 
 func (s *Store) GetEdgesFrom(ctx context.Context, nodeID string) ([]*Edge, error) {
-	return s.queryEdges(ctx, `SELECT id, from_id, to_id, type, acyclic, weight, metadata, created_at FROM edges WHERE from_id=?`, nodeID)
+	return s.queryEdges(ctx, `SELECT id, from_id, to_id, type, acyclic, weight, metadata, valid_at, invalid_at, created_at FROM edges WHERE from_id=?`, nodeID)
 }
 
 func (s *Store) GetEdgesTo(ctx context.Context, nodeID string) ([]*Edge, error) {
-	return s.queryEdges(ctx, `SELECT id, from_id, to_id, type, acyclic, weight, metadata, created_at FROM edges WHERE to_id=?`, nodeID)
+	return s.queryEdges(ctx, `SELECT id, from_id, to_id, type, acyclic, weight, metadata, valid_at, invalid_at, created_at FROM edges WHERE to_id=?`, nodeID)
 }
 
 func (s *Store) GetEdgesBetween(ctx context.Context, nodeIDs []string) ([]*Edge, error) {
@@ -396,7 +453,7 @@ func (s *Store) GetEdgesBetween(ctx context.Context, nodeIDs []string) ([]*Edge,
 			args = append(args, id)
 		}
 		ph := strings.Join(placeholders, ",")
-		q := fmt.Sprintf(`SELECT id, from_id, to_id, type, acyclic, weight, metadata, created_at FROM edges
+		q := fmt.Sprintf(`SELECT id, from_id, to_id, type, acyclic, weight, metadata, valid_at, invalid_at, created_at FROM edges
 			WHERE from_id IN (%s) AND to_id IN (%s)`, ph, ph)
 		args = append(args, args...)
 		edges, err := s.queryEdges(ctx, q, args...)
@@ -409,7 +466,7 @@ func (s *Store) GetEdgesBetween(ctx context.Context, nodeIDs []string) ([]*Edge,
 }
 
 func (s *Store) GetNeighbors(ctx context.Context, nodeID string) ([]*Node, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT n.id, n.type, n.content, n.content_hash, n.summary, n.scope, n.project, n.tier, n.tags, n.confidence, n.access_count, n.created_at, n.updated_at, n.accessed_at, n.source_session, n.source_agent, n.version
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT n.id, n.type, n.content, n.content_hash, n.summary, n.scope, n.project, n.tier, n.tags, n.key, n.pinned, n.confidence, n.access_count, n.created_at, n.updated_at, n.accessed_at, n.source_session, n.source_agent, n.version
 		FROM nodes n JOIN edges e ON (e.to_id = n.id AND e.from_id = ?) OR (e.from_id = n.id AND e.to_id = ?)`, nodeID, nodeID)
 	if err != nil {
 		return nil, err
@@ -474,7 +531,7 @@ func (s *Store) AddFileWatch(ctx context.Context, filePath, nodeID, gitHash stri
 }
 
 func (s *Store) GetNodesByFile(ctx context.Context, filePath string) ([]*Node, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT n.id, n.type, n.content, n.content_hash, n.summary, n.scope, n.project, n.tier, n.tags, n.confidence, n.access_count, n.created_at, n.updated_at, n.accessed_at, n.source_session, n.source_agent, n.version
+	rows, err := s.db.QueryContext(ctx, `SELECT n.id, n.type, n.content, n.content_hash, n.summary, n.scope, n.project, n.tier, n.tags, n.key, n.pinned, n.confidence, n.access_count, n.created_at, n.updated_at, n.accessed_at, n.source_session, n.source_agent, n.version
 		FROM nodes n JOIN file_watch fw ON fw.node_id = n.id WHERE fw.file_path = ?`, filePath)
 	if err != nil {
 		return nil, err
@@ -533,16 +590,27 @@ func nullTime(t time.Time) sql.NullTime {
 	return sql.NullTime{Time: t, Valid: true}
 }
 
+func nullString(s string) sql.NullString {
+	if s == "" {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: s, Valid: true}
+}
+
 func scanNodes(rows *sql.Rows) ([]*Node, error) {
 	var out []*Node
 	for rows.Next() {
 		n := &Node{}
 		var accessedAt sql.NullTime
-		if err := rows.Scan(&n.ID, &n.Type, &n.Content, &n.ContentHash, &n.Summary, &n.Scope, &n.Project, &n.Tier, &n.Tags, &n.Confidence, &n.AccessCount, &n.CreatedAt, &n.UpdatedAt, &accessedAt, &n.SourceSession, &n.SourceAgent, &n.Version); err != nil {
+		var key sql.NullString
+		if err := rows.Scan(&n.ID, &n.Type, &n.Content, &n.ContentHash, &n.Summary, &n.Scope, &n.Project, &n.Tier, &n.Tags, &key, &n.Pinned, &n.Confidence, &n.AccessCount, &n.CreatedAt, &n.UpdatedAt, &accessedAt, &n.SourceSession, &n.SourceAgent, &n.Version); err != nil {
 			return nil, err
 		}
 		if accessedAt.Valid {
 			n.AccessedAt = accessedAt.Time
+		}
+		if key.Valid {
+			n.Key = key.String
 		}
 		out = append(out, n)
 	}
@@ -555,11 +623,22 @@ func (s *Store) queryEdges(ctx context.Context, query string, args ...any) ([]*E
 		return nil, err
 	}
 	defer rows.Close()
+	return scanEdges(rows)
+}
+
+func scanEdges(rows *sql.Rows) ([]*Edge, error) {
 	var out []*Edge
 	for rows.Next() {
 		e := &Edge{}
-		if err := rows.Scan(&e.ID, &e.FromID, &e.ToID, &e.Type, &e.Acyclic, &e.Weight, &e.Metadata, &e.CreatedAt); err != nil {
+		var validAt, invalidAt sql.NullTime
+		if err := rows.Scan(&e.ID, &e.FromID, &e.ToID, &e.Type, &e.Acyclic, &e.Weight, &e.Metadata, &validAt, &invalidAt, &e.CreatedAt); err != nil {
 			return nil, err
+		}
+		if validAt.Valid {
+			e.ValidAt = validAt.Time
+		}
+		if invalidAt.Valid {
+			e.InvalidAt = invalidAt.Time
 		}
 		out = append(out, e)
 	}
@@ -661,7 +740,7 @@ func (s *Store) GetNodesBatch(ctx context.Context, ids []string) ([]*Node, error
 			placeholders[j] = "?"
 			args[j] = id
 		}
-		q := fmt.Sprintf(`SELECT id, type, content, content_hash, summary, scope, project, tier, tags, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version FROM nodes WHERE id IN (%s)`, strings.Join(placeholders, ","))
+		q := fmt.Sprintf(`SELECT id, type, content, content_hash, summary, scope, project, tier, tags, key, pinned, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version FROM nodes WHERE id IN (%s)`, strings.Join(placeholders, ","))
 		rows, err := s.db.QueryContext(ctx, q, args...)
 		if err != nil {
 			return nil, err
@@ -747,9 +826,9 @@ func (t *txStore) queryNodes(ctx context.Context, query string, args ...any) ([]
 }
 
 func (t *txStore) CreateNode(ctx context.Context, n *Node) error {
-	_, err := t.tx.ExecContext(ctx, `INSERT INTO nodes (id, type, content, content_hash, summary, scope, project, tier, tags, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		n.ID, n.Type, n.Content, n.ContentHash, n.Summary, n.Scope, n.Project, n.Tier, n.Tags, n.Confidence, n.AccessCount,
+	_, err := t.tx.ExecContext(ctx, `INSERT INTO nodes (id, type, content, content_hash, summary, scope, project, tier, tags, key, pinned, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		n.ID, n.Type, n.Content, n.ContentHash, n.Summary, n.Scope, n.Project, n.Tier, n.Tags, nullString(n.Key), n.Pinned, n.Confidence, n.AccessCount,
 		n.CreatedAt, n.UpdatedAt, nullTime(n.AccessedAt), n.SourceSession, n.SourceAgent, n.Version)
 	return err
 }
@@ -757,13 +836,38 @@ func (t *txStore) CreateNode(ctx context.Context, n *Node) error {
 func (t *txStore) GetNode(ctx context.Context, id string) (*Node, error) {
 	n := &Node{}
 	var accessedAt sql.NullTime
-	err := t.tx.QueryRowContext(ctx, `SELECT id, type, content, content_hash, summary, scope, project, tier, tags, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version FROM nodes WHERE id = ?`, id).
-		Scan(&n.ID, &n.Type, &n.Content, &n.ContentHash, &n.Summary, &n.Scope, &n.Project, &n.Tier, &n.Tags, &n.Confidence, &n.AccessCount, &n.CreatedAt, &n.UpdatedAt, &accessedAt, &n.SourceSession, &n.SourceAgent, &n.Version)
+	var key sql.NullString
+	err := t.tx.QueryRowContext(ctx, `SELECT id, type, content, content_hash, summary, scope, project, tier, tags, key, pinned, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version FROM nodes WHERE id = ?`, id).
+		Scan(&n.ID, &n.Type, &n.Content, &n.ContentHash, &n.Summary, &n.Scope, &n.Project, &n.Tier, &n.Tags, &key, &n.Pinned, &n.Confidence, &n.AccessCount, &n.CreatedAt, &n.UpdatedAt, &accessedAt, &n.SourceSession, &n.SourceAgent, &n.Version)
 	if err != nil {
 		return nil, err
 	}
 	if accessedAt.Valid {
 		n.AccessedAt = accessedAt.Time
+	}
+	if key.Valid {
+		n.Key = key.String
+	}
+	return n, nil
+}
+
+func (t *txStore) GetNodeByKey(ctx context.Context, key, project string) (*Node, error) {
+	n := &Node{}
+	var accessedAt sql.NullTime
+	var k sql.NullString
+	err := t.tx.QueryRowContext(ctx, `SELECT id, type, content, content_hash, summary, scope, project, tier, tags, key, pinned, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version FROM nodes WHERE key = ? AND project = ?`, key, project).
+		Scan(&n.ID, &n.Type, &n.Content, &n.ContentHash, &n.Summary, &n.Scope, &n.Project, &n.Tier, &n.Tags, &k, &n.Pinned, &n.Confidence, &n.AccessCount, &n.CreatedAt, &n.UpdatedAt, &accessedAt, &n.SourceSession, &n.SourceAgent, &n.Version)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if accessedAt.Valid {
+		n.AccessedAt = accessedAt.Time
+	}
+	if k.Valid {
+		n.Key = k.String
 	}
 	return n, nil
 }
@@ -785,7 +889,7 @@ func (t *txStore) GetNodesBatch(ctx context.Context, ids []string) ([]*Node, err
 			placeholders[j] = "?"
 			args[j] = id
 		}
-		q := fmt.Sprintf(`SELECT id, type, content, content_hash, summary, scope, project, tier, tags, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version FROM nodes WHERE id IN (%s)`, strings.Join(placeholders, ","))
+		q := fmt.Sprintf(`SELECT id, type, content, content_hash, summary, scope, project, tier, tags, key, pinned, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version FROM nodes WHERE id IN (%s)`, strings.Join(placeholders, ","))
 		rows, err := t.tx.QueryContext(ctx, q, args...)
 		if err != nil {
 			return nil, err
@@ -801,8 +905,8 @@ func (t *txStore) GetNodesBatch(ctx context.Context, ids []string) ([]*Node, err
 }
 
 func (t *txStore) UpdateNode(ctx context.Context, n *Node) error {
-	_, err := t.tx.ExecContext(ctx, `UPDATE nodes SET type=?, content=?, content_hash=?, summary=?, scope=?, project=?, tier=?, tags=?, confidence=?, access_count=?, updated_at=?, accessed_at=?, source_session=?, source_agent=?, version=? WHERE id=?`,
-		n.Type, n.Content, n.ContentHash, n.Summary, n.Scope, n.Project, n.Tier, n.Tags, n.Confidence, n.AccessCount,
+	_, err := t.tx.ExecContext(ctx, `UPDATE nodes SET type=?, content=?, content_hash=?, summary=?, scope=?, project=?, tier=?, tags=?, key=?, pinned=?, confidence=?, access_count=?, updated_at=?, accessed_at=?, source_session=?, source_agent=?, version=? WHERE id=?`,
+		n.Type, n.Content, n.ContentHash, n.Summary, n.Scope, n.Project, n.Tier, n.Tags, nullString(n.Key), n.Pinned, n.Confidence, n.AccessCount,
 		n.UpdatedAt, nullTime(n.AccessedAt), n.SourceSession, n.SourceAgent, n.Version, n.ID)
 	return err
 }
@@ -817,7 +921,7 @@ func (t *txStore) DeleteNode(ctx context.Context, id string) error {
 }
 
 func (t *txStore) ListNodes(ctx context.Context, f NodeFilter) ([]*Node, error) {
-	q := "SELECT id, type, content, content_hash, summary, scope, project, tier, tags, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version FROM nodes WHERE 1=1"
+	q := "SELECT id, type, content, content_hash, summary, scope, project, tier, tags, key, pinned, confidence, access_count, created_at, updated_at, accessed_at, source_session, source_agent, version FROM nodes WHERE 1=1"
 	var args []any
 	if f.Type != "" {
 		q += " AND type=?"
@@ -843,6 +947,10 @@ func (t *txStore) ListNodes(ctx context.Context, f NodeFilter) ([]*Node, error) 
 		q += " AND source_session=?"
 		args = append(args, f.SourceSession)
 	}
+	if f.Pinned != nil {
+		q += " AND pinned=?"
+		args = append(args, *f.Pinned)
+	}
 	rows, err := t.tx.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -856,7 +964,7 @@ func (t *txStore) SearchNodes(ctx context.Context, query string, limit int) ([]*
 		limit = 10
 	}
 	ftsQuery := escapeFTS5(query)
-	rows, err := t.tx.QueryContext(ctx, `SELECT n.id, n.type, n.content, n.content_hash, n.summary, n.scope, n.project, n.tier, n.tags, n.confidence, n.access_count, n.created_at, n.updated_at, n.accessed_at, n.source_session, n.source_agent, n.version
+	rows, err := t.tx.QueryContext(ctx, `SELECT n.id, n.type, n.content, n.content_hash, n.summary, n.scope, n.project, n.tier, n.tags, n.key, n.pinned, n.confidence, n.access_count, n.created_at, n.updated_at, n.accessed_at, n.source_session, n.source_agent, n.version
 		FROM nodes_fts f JOIN nodes n ON f.rowid = n.rowid WHERE nodes_fts MATCH ? ORDER BY rank LIMIT ?`, ftsQuery, limit)
 	if err != nil {
 		return nil, err
@@ -868,12 +976,13 @@ func (t *txStore) SearchNodes(ctx context.Context, query string, limit int) ([]*
 func (t *txStore) SearchNodeByHash(ctx context.Context, hash, scope, project string) (*Node, error) {
 	n := &Node{}
 	var at sql.NullTime
+	var key sql.NullString
 	err := t.tx.QueryRowContext(ctx,
-		`SELECT id,type,content,content_hash,summary,scope,project,tier,tags,confidence,
+		`SELECT id,type,content,content_hash,summary,scope,project,tier,tags,key,pinned,confidence,
 		access_count,created_at,updated_at,accessed_at,source_session,source_agent,version
 		FROM nodes WHERE content_hash=? AND scope=? AND (project=? OR project IS NULL) LIMIT 1`,
 		hash, scope, project).Scan(&n.ID, &n.Type, &n.Content, &n.ContentHash, &n.Summary, &n.Scope, &n.Project,
-		&n.Tier, &n.Tags, &n.Confidence, &n.AccessCount, &n.CreatedAt, &n.UpdatedAt, &at,
+		&n.Tier, &n.Tags, &key, &n.Pinned, &n.Confidence, &n.AccessCount, &n.CreatedAt, &n.UpdatedAt, &at,
 		&n.SourceSession, &n.SourceAgent, &n.Version)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -884,11 +993,14 @@ func (t *txStore) SearchNodeByHash(ctx context.Context, hash, scope, project str
 	if at.Valid {
 		n.AccessedAt = at.Time
 	}
+	if key.Valid {
+		n.Key = key.String
+	}
 	return n, nil
 }
 
 func (t *txStore) GetNeighbors(ctx context.Context, nodeID string) ([]*Node, error) {
-	rows, err := t.tx.QueryContext(ctx, `SELECT DISTINCT n.id, n.type, n.content, n.content_hash, n.summary, n.scope, n.project, n.tier, n.tags, n.confidence, n.access_count, n.created_at, n.updated_at, n.accessed_at, n.source_session, n.source_agent, n.version
+	rows, err := t.tx.QueryContext(ctx, `SELECT DISTINCT n.id, n.type, n.content, n.content_hash, n.summary, n.scope, n.project, n.tier, n.tags, n.key, n.pinned, n.confidence, n.access_count, n.created_at, n.updated_at, n.accessed_at, n.source_session, n.source_agent, n.version
 		FROM nodes n JOIN edges e ON (e.to_id = n.id AND e.from_id = ?) OR (e.from_id = n.id AND e.to_id = ?)`, nodeID, nodeID)
 	if err != nil {
 		return nil, err
@@ -898,19 +1010,31 @@ func (t *txStore) GetNeighbors(ctx context.Context, nodeID string) ([]*Node, err
 }
 
 func (t *txStore) CreateEdge(ctx context.Context, e *Edge) error {
-	_, err := t.tx.ExecContext(ctx, `INSERT INTO edges (id, from_id, to_id, type, acyclic, weight, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		e.ID, e.FromID, e.ToID, e.Type, e.Acyclic, e.Weight, e.Metadata, e.CreatedAt)
+	_, err := t.tx.ExecContext(ctx, `INSERT INTO edges (id, from_id, to_id, type, acyclic, weight, metadata, valid_at, invalid_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		e.ID, e.FromID, e.ToID, e.Type, e.Acyclic, e.Weight, e.Metadata, nullTime(e.ValidAt), nullTime(e.InvalidAt), e.CreatedAt)
 	return err
 }
 
 func (t *txStore) GetEdge(ctx context.Context, id string) (*Edge, error) {
 	e := &Edge{}
-	err := t.tx.QueryRowContext(ctx, `SELECT id, from_id, to_id, type, acyclic, weight, metadata, created_at FROM edges WHERE id=?`, id).
-		Scan(&e.ID, &e.FromID, &e.ToID, &e.Type, &e.Acyclic, &e.Weight, &e.Metadata, &e.CreatedAt)
+	var validAt, invalidAt sql.NullTime
+	err := t.tx.QueryRowContext(ctx, `SELECT id, from_id, to_id, type, acyclic, weight, metadata, valid_at, invalid_at, created_at FROM edges WHERE id=?`, id).
+		Scan(&e.ID, &e.FromID, &e.ToID, &e.Type, &e.Acyclic, &e.Weight, &e.Metadata, &validAt, &invalidAt, &e.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
+	if validAt.Valid {
+		e.ValidAt = validAt.Time
+	}
+	if invalidAt.Valid {
+		e.InvalidAt = invalidAt.Time
+	}
 	return e, nil
+}
+
+func (t *txStore) InvalidateEdge(ctx context.Context, id string) error {
+	_, err := t.tx.ExecContext(ctx, `UPDATE edges SET invalid_at = ? WHERE id = ?`, time.Now(), id)
+	return err
 }
 
 func (t *txStore) DeleteEdge(ctx context.Context, id string) error {
@@ -919,11 +1043,11 @@ func (t *txStore) DeleteEdge(ctx context.Context, id string) error {
 }
 
 func (t *txStore) GetEdgesFrom(ctx context.Context, nodeID string) ([]*Edge, error) {
-	return t.queryEdgesTx(ctx, `SELECT id, from_id, to_id, type, acyclic, weight, metadata, created_at FROM edges WHERE from_id=?`, nodeID)
+	return t.queryEdgesTx(ctx, `SELECT id, from_id, to_id, type, acyclic, weight, metadata, valid_at, invalid_at, created_at FROM edges WHERE from_id=?`, nodeID)
 }
 
 func (t *txStore) GetEdgesTo(ctx context.Context, nodeID string) ([]*Edge, error) {
-	return t.queryEdgesTx(ctx, `SELECT id, from_id, to_id, type, acyclic, weight, metadata, created_at FROM edges WHERE to_id=?`, nodeID)
+	return t.queryEdgesTx(ctx, `SELECT id, from_id, to_id, type, acyclic, weight, metadata, valid_at, invalid_at, created_at FROM edges WHERE to_id=?`, nodeID)
 }
 
 func (t *txStore) GetEdgesBetween(ctx context.Context, nodeIDs []string) ([]*Edge, error) {
@@ -944,7 +1068,7 @@ func (t *txStore) GetEdgesBetween(ctx context.Context, nodeIDs []string) ([]*Edg
 			args = append(args, id)
 		}
 		ph := strings.Join(placeholders, ",")
-		q := fmt.Sprintf(`SELECT id, from_id, to_id, type, acyclic, weight, metadata, created_at FROM edges
+		q := fmt.Sprintf(`SELECT id, from_id, to_id, type, acyclic, weight, metadata, valid_at, invalid_at, created_at FROM edges
 			WHERE from_id IN (%s) AND to_id IN (%s)`, ph, ph)
 		args = append(args, args...)
 		edges, err := t.queryEdgesTx(ctx, q, args...)
@@ -1199,13 +1323,5 @@ func (t *txStore) queryEdgesTx(ctx context.Context, query string, args ...any) (
 		return nil, err
 	}
 	defer rows.Close()
-	var out []*Edge
-	for rows.Next() {
-		e := &Edge{}
-		if err := rows.Scan(&e.ID, &e.FromID, &e.ToID, &e.Type, &e.Acyclic, &e.Weight, &e.Metadata, &e.CreatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, e)
-	}
-	return out, rows.Err()
+	return scanEdges(rows)
 }

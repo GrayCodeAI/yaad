@@ -66,13 +66,15 @@ func (p *ProactiveContext) Predict(ctx context.Context, project string, budget i
 	}
 
 	// 3. High-centrality nodes (many inbound edges = important)
-	// Use CountEdges to avoid loading full edge objects per node
 	type centNode struct {
 		node     *storage.Node
 		inDegree int
 	}
 	var ranked []centNode
 	for _, n := range all {
+		if ctx.Err() != nil {
+			break
+		}
 		inbound, _, _ := p.eng.store.CountEdges(ctx, n.ID)
 		ranked = append(ranked, centNode{n, inbound})
 	}

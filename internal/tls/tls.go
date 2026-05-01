@@ -43,7 +43,10 @@ func TLSConfig(cfg Config, dataDir string) (*tls.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &tls.Config{Certificates: []tls.Certificate{tlsCert}}, nil
+	return &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+		MinVersion:   tls.VersionTLS12,
+	}, nil
 }
 
 func generateSelfSigned(certFile, keyFile string) error {
@@ -56,7 +59,7 @@ func generateSelfSigned(certFile, keyFile string) error {
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{Organization: []string{"yaad"}},
 		NotBefore:    time.Now(),
-		NotAfter:     time.Now().Add(10 * 365 * 24 * time.Hour),
+		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
@@ -68,12 +71,14 @@ func generateSelfSigned(certFile, keyFile string) error {
 		return err
 	}
 
-	cf, err := os.Create(certFile)
+	cf, err := os.OpenFile(certFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		return err
 	}
 	defer cf.Close()
-	pem.Encode(cf, &pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	if err := pem.Encode(cf, &pem.Block{Type: "CERTIFICATE", Bytes: certDER}); err != nil {
+		return err
+	}
 
 	kf, err := os.OpenFile(keyFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {

@@ -213,12 +213,11 @@ func (g *graphImpl) Descendants(ctx context.Context, id string) ([]string, error
 
 // IntentBFS performs intent-aware BFS from startID.
 // Edge traversal is weighted by the query intent (MAGMA-style adaptive traversal).
-// Edges with higher intent weight are traversed first and given higher scores.
+// Capped at 100 results to prevent unbounded growth on dense graphs.
 func (g *graphImpl) IntentBFS(ctx context.Context, startID string, maxDepth int, queryIntent intent.Intent) ([]string, error) {
+	const maxResults = 100
 	weights := intent.Weights(queryIntent)
 
-	// Use a priority-aware BFS: score each neighbor by edge weight × semantic fit
-	// For simplicity (no embeddings required), we use edge weight as the sole score.
 	type candidate struct {
 		id    string
 		score float64
@@ -227,10 +226,13 @@ func (g *graphImpl) IntentBFS(ctx context.Context, startID string, maxDepth int,
 
 	visited := map[string]bool{startID: true}
 	queue := []candidate{{id: startID, score: 1.0, depth: 0}}
-	var result []string
-	result = append(result, startID)
+	result := []string{startID}
 
-	for len(queue) > 0 {
+	for len(queue) > 0 && len(result) < maxResults {
+		if err := ctx.Err(); err != nil {
+			return result, nil
+		}
+
 		curr := queue[0]
 		queue = queue[1:]
 
@@ -238,7 +240,6 @@ func (g *graphImpl) IntentBFS(ctx context.Context, startID string, maxDepth int,
 			continue
 		}
 
-		// Get all edges from this node
 		edges, err := g.store.GetEdgesFrom(ctx, curr.id)
 		if err != nil {
 			continue
@@ -251,7 +252,6 @@ func (g *graphImpl) IntentBFS(ctx context.Context, startID string, maxDepth int,
 		allEdges = append(allEdges, edges...)
 		allEdges = append(allEdges, edgesTo...)
 
-		// Score and sort neighbors by intent weight
 		type scored struct {
 			id    string
 			score float64
@@ -270,12 +270,14 @@ func (g *graphImpl) IntentBFS(ctx context.Context, startID string, maxDepth int,
 			neighbors = append(neighbors, scored{neighborID, score})
 		}
 
-		// Sort by score descending
 		sort.Slice(neighbors, func(i, j int) bool {
 			return neighbors[i].score > neighbors[j].score
 		})
 
 		for _, n := range neighbors {
+			if len(result) >= maxResults {
+				break
+			}
 			if !visited[n.id] {
 				visited[n.id] = true
 				result = append(result, n.id)

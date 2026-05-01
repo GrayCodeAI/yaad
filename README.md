@@ -4,11 +4,11 @@
 
 ### Give your coding agent persistent memory.
 
-One config line. Works with any agent. Zero setup.
+One config line. Works with any MCP agent. Zero setup.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-a78bfa.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Pure_Go-no_CGO-00ADD8?logo=go)](go.mod)
-[![Tests](https://img.shields.io/badge/Tests-17%2F17-68d391)](integration_test.go)
+[![Tests](https://img.shields.io/badge/Tests-passing-68d391)](yaad_test.go)
 [![CI](https://img.shields.io/github/actions/workflow/status/GrayCodeAI/yaad/ci.yml?label=ci&logo=github)](https://github.com/GrayCodeAI/yaad/actions)
 [![Discord](https://img.shields.io/badge/Discord-GrayCodeAI-5865F2?logo=discord&logoColor=white)](https://discord.gg/UqMbQJRE5)
 
@@ -40,13 +40,13 @@ Now your agent remembers everything — across sessions, across models, across p
 
 ```bash
 # Install
-curl -fsSL https://raw.githubusercontent.com/GrayCodeAI/yaad/main/install.sh | sh
+go install github.com/GrayCodeAI/yaad/cmd/yaad@latest
 
 # Add to your project
 cd your-project && yaad init
 
-# Connect your agent
-yaad setup hawk          # or any of 23 supported agents
+# Connect your agent (generates .mcp.json + hooks)
+yaad setup
 ```
 
 **That's it.** Your agent now has persistent, graph-native memory.
@@ -79,42 +79,6 @@ Your agent starts a session → Yaad injects context from previous sessions:
 Your agent works → stores decisions, bugs, conventions automatically.  
 Session ends → Yaad compresses and links everything in a memory graph.  
 Next session → picks up exactly where you left off. **Zero re-explaining.**
-
----
-
-## Supported Agents
-
-Yaad works with **any** coding agent that supports MCP or HTTP.
-
-<div align="center">
-
-| | Agent | Setup |
-|:---:|:---|:---|
-| 🦅 | **Hawk** (GrayCodeAI) | `yaad setup hawk` |
-| 🤖 | **Claude Code** | `yaad setup claude-code` |
-| 🧠 | **Codex CLI** | `yaad setup codex-cli` |
-| 💎 | **Gemini CLI** | `yaad setup gemini-cli` |
-| 🖱️ | **Cursor** | `yaad setup cursor` |
-| 📦 | **OpenCode** | `yaad setup opencode` |
-| 🔧 | **Cline** | `yaad setup cline` |
-| 🌊 | **Windsurf** | `yaad setup windsurf` |
-| ⚡ | **Amp** | `yaad setup amp` |
-| 🔢 | **Kilo** | `yaad setup kilo` |
-| 🪿 | **Goose** | `yaad setup goose` |
-| 🏛️ | **Hermes** | `yaad setup hermes` |
-| 🌸 | **Qwen Code** | `yaad setup qwen-code` |
-| 🌊 | **Mistral Vibe** | `yaad setup mistral-vibe` |
-| ☁️ | **Kiro** (AWS) | `yaad setup kiro` |
-| 🐙 | **Copilot CLI** | `yaad setup copilot-cli` |
-| 🦘 | **Roo Code** | `yaad setup roo-code` |
-| 🍬 | **Crush** | `yaad setup crush` |
-| 🚀 | **Warp** | `yaad setup warp` |
-| 🔍 | **Augment** | `yaad setup augment` |
-| ✏️ | **Zed** | `yaad setup zed` |
-| 🤝 | **Aider** | `yaad setup aider` |
-| 🔌 | **Any other** | Universal MCP config ↑ |
-
-</div>
 
 ---
 
@@ -170,22 +134,22 @@ Your Agent                          Yaad
 
 | Type | What it stores | Example |
 |---|---|---|
-| 🟢 `convention` | Coding rules & patterns | *"Use jose not jsonwebtoken"* |
-| 🔵 `decision` | Architecture choices + why | *"Chose NATS for backpressure"* |
-| 🔴 `bug` | Symptom → Cause → Fix | *"Token race → use mutex"* |
-| 🟡 `spec` | How a subsystem works | *"Auth: RS256 JWT with jose"* |
-| 🟣 `task` | Done / in-progress / blocked | *"✓ auth, → rate limiting"* |
-| 🩷 `skill` | Reusable step sequences | *"Deploy: test → build → fly"* |
-| 🩵 `preference` | User coding style | *"Functional style, tabs"* |
-| ⚪ `file` | File/module anchor | *"src/middleware/auth.ts"* |
-| 🔘 `entity` | Auto-extracted entity | *"jose", "PostgreSQL"* |
+| `convention` | Coding rules & patterns | *"Use jose not jsonwebtoken"* |
+| `decision` | Architecture choices + why | *"Chose NATS for backpressure"* |
+| `bug` | Symptom → Cause → Fix | *"Token race → use mutex"* |
+| `spec` | How a subsystem works | *"Auth: RS256 JWT with jose"* |
+| `task` | Done / in-progress / blocked | *"✓ auth, → rate limiting"* |
+| `skill` | Reusable step sequences | *"Deploy: test → build → fly"* |
+| `preference` | User coding style | *"Functional style, tabs"* |
+| `file` | File/module anchor | *"src/middleware/auth.ts"* |
+| `entity` | Auto-extracted entity | *"jose", "PostgreSQL"* |
 
 ---
 
 ## Key Features
 
 <details>
-<summary><b>🧠 Graph-Native Memory (Relaxed DAG)</b></summary>
+<summary><b>Graph-Native Memory (Relaxed DAG)</b></summary>
 
 Not a flat list of memories. A directed graph with 8 edge types:
 - **Causal** (acyclic): `led_to`, `supersedes`, `caused_by`, `learned_in`, `part_of`
@@ -195,9 +159,9 @@ Enables: subgraph extraction, impact analysis, causal chain traversal.
 </details>
 
 <details>
-<summary><b>🔍 Intent-Aware 4-Path Search</b></summary>
+<summary><b>Intent-Aware 4-Path Search</b></summary>
 
-Based on MAGMA (arxiv:2601.03236, 0.700 on LoCoMo):
+Based on MAGMA (arxiv:2601.03236):
 1. **BM25** (FTS5) — keyword matching
 2. **Vector** (optional) — semantic similarity
 3. **Graph** (intent-aware BFS) — edge weights boosted by query intent
@@ -207,7 +171,7 @@ Fused with Reciprocal Rank Fusion (RRF).
 </details>
 
 <details>
-<summary><b>⚡ Dual-Stream Ingestion</b></summary>
+<summary><b>Dual-Stream Ingestion</b></summary>
 
 Based on MAGMA + GAM research:
 - **Fast path** (sync): store node + temporal edge, return in <1ms
@@ -217,43 +181,33 @@ Agent is never blocked waiting for memory processing.
 </details>
 
 <details>
-<summary><b>📊 Git-Aware Staleness</b></summary>
+<summary><b>Git-Aware Staleness</b></summary>
 
-When source files change, Yaad walks the graph backwards to flag entire subgraphs:
+When source files change, Yaad walks the graph backwards to flag stale subgraphs:
 
-*"⚠ Auth subgraph may be stale: src/auth.ts modified 2h ago. Affected: [decision: RS256], [convention: jose], [bug: token refresh]"*
+*"Auth subgraph may be stale: src/auth.ts modified 2h ago. Affected: [decision: RS256], [convention: jose], [bug: token refresh]"*
 </details>
 
 <details>
-<summary><b>💥 Impact Analysis</b></summary>
+<summary><b>Impact Analysis</b></summary>
 
 *"What memories break if I change schema.sql?"* → reverse graph traversal → *"3 decisions + 2 specs + 1 convention affected"*
 </details>
 
 <details>
-<summary><b>🤝 Team Sync (Git Chunks)</b></summary>
+<summary><b>Auto-Decay & Compaction</b></summary>
 
-Share memories via git — no server, no merge conflicts:
-```bash
-yaad sync                    # export chunk + import teammates' chunks
-git add .yaad/manifest.json .yaad/chunks/
-git push
-```
+- Half-life decay: unused memories fade automatically
+- Compaction: low-confidence memories merge into summaries
+- Pinned memories never decay (core architecture decisions, deploy process)
+- Auto-decay runs on every session start — zero maintenance
 </details>
 
 <details>
-<summary><b>🔌 4 Protocol Interfaces</b></summary>
+<summary><b>Privacy & Security</b></summary>
 
-- **MCP** (stdio) — 13 tools, works with any MCP agent
-- **REST/HTTPS** — 30+ endpoints on `:3456`
-- **gRPC** — port `:3457`, streaming support
-- **SSE** — real-time memory events at `/yaad/events`
-</details>
-
-<details>
-<summary><b>🛡️ Privacy & Security</b></summary>
-
-- API keys, tokens, secrets auto-stripped on ingest
+- API keys, tokens, secrets auto-stripped on ingest (regex + entropy detection)
+- Localhost-only binding (127.0.0.1)
 - HTTPS with auto self-signed cert generation
 - All data stays local (SQLite, your machine)
 - No LLM API calls — Yaad never sends your code anywhere
@@ -261,31 +215,125 @@ git push
 
 ---
 
+## MCP Tools (23 tools)
+
+Your agent gets these tools automatically via `yaad mcp`:
+
+| Tool | What it does |
+|---|---|
+| `yaad_remember` | Store a memory (convention, decision, bug, spec, task, skill, preference) |
+| `yaad_recall` | Graph-aware search with intent classification |
+| `yaad_hybrid_recall` | 4-path search: BM25 + vector + graph + temporal |
+| `yaad_context` | Get hot-tier context for session injection |
+| `yaad_link` | Create typed edge between memories |
+| `yaad_forget` | Archive a memory (sets confidence to 0) |
+| `yaad_feedback` | Approve / edit / discard a memory |
+| `yaad_pin` | Pin/unpin a memory (pinned = always in context) |
+| `yaad_stale` | Find memories invalidated by git changes |
+| `yaad_proactive` | Predict what context the agent needs next |
+| `yaad_compact` | Merge low-confidence memories into summaries |
+| `yaad_mental_model` | Auto-generated project summary |
+| `yaad_skill_store` | Save a reusable step sequence |
+| `yaad_skill_get` | Retrieve and replay a skill |
+| `yaad_session_recap` | Summary of the previous session |
+| `yaad_subgraph` | Extract neighborhood around a memory |
+| `yaad_impact` | What memories are affected by a file change? |
+| `yaad_status` | Graph stats (nodes, edges, sessions) |
+| `yaad_decay` | Manually trigger confidence decay |
+| `yaad_gc` | Garbage collect archived memories |
+| `yaad_embed` | Generate vector embedding for a node |
+| `yaad_export` | Export graph as JSON/Markdown/Obsidian |
+| `yaad_import` | Import graph from JSON |
+
+---
+
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│              ANY CODING AGENT                                   │
-│  Hawk · Claude Code · Cursor · Gemini CLI · OpenCode · Any     │
-└──────┬───────────────┬──────────────────────────┬───────────────┘
-       │ MCP (stdio)   │ REST/HTTPS (:3456)       │ gRPC (:3457)
-       ▼               ▼                          ▼
+│              YOUR CODING AGENT                                   │
+│  Hawk · Claude Code · Cursor · Gemini CLI · Any MCP Agent       │
+└──────┬───────────────┬──────────────────────────────────────────┘
+       │ MCP (stdio)   │ REST/HTTPS (127.0.0.1:3456)
+       ▼               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                       YAAD                                      │
 │  Memory Engine · Graph Engine · 4-Path Search · Dual-Stream     │
 ├─────────────────────────────────────────────────────────────────┤
-│  SQLite (pure Go, no CGO) · FTS5 · Embeddings (optional)       │
+│  SQLite (WAL mode) · FTS5 · Embeddings (optional)              │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**18MB binary. Zero dependencies. Pure Go. No C compiler. No Docker. No cloud.**
+**Single binary. Zero dependencies. Pure Go. No CGO. No Docker. No cloud.**
 
 ---
 
-## Troubleshooting
+## CLI Commands
 
 ```bash
-yaad doctor    # diagnose setup issues (DB, server, MCP config, git)
+yaad init              # Initialize .yaad/ in current project
+yaad setup             # Configure MCP + hooks for your agent
+yaad serve             # Start REST API server
+yaad mcp               # Start MCP server on stdio (used by agents)
+
+yaad remember "..."    # Store a memory
+yaad recall "..."      # Search memories
+yaad link A B type     # Create edge between nodes
+yaad status            # Show graph stats
+yaad doctor            # Diagnose setup issues
+
+yaad decay             # Apply confidence decay
+yaad gc                # Garbage collect low-confidence nodes
+yaad bench             # Run retrieval benchmark
+
+yaad export-json       # Export as JSON
+yaad export-md         # Export as Markdown
+yaad export-obsidian   # Export as Obsidian vault
+yaad import-json       # Import from JSON
+```
+
+---
+
+## Configuration
+
+Generated at `.yaad/config.toml`:
+
+```toml
+[server]
+port = 3456
+host = "127.0.0.1"
+
+[memory]
+hot_token_budget = 800
+warm_token_budget = 800
+max_memories = 10000
+
+[search]
+bm25_weight = 0.5
+vector_weight = 0.5
+default_limit = 10
+
+[decay]
+enabled = true
+half_life_days = 30
+min_confidence = 0.1
+boost_on_access = 0.2
+
+[git]
+watch = true
+auto_stale = true
+```
+
+---
+
+## Development
+
+```bash
+git clone https://github.com/GrayCodeAI/yaad.git
+cd yaad
+make build           # Build binary
+make test            # Run all tests
+make install         # Install to $GOPATH/bin
 ```
 
 ---
@@ -294,12 +342,11 @@ yaad doctor    # diagnose setup issues (DB, server, MCP config, git)
 
 | Doc | What |
 |---|---|
-| [PLAN.md](PLAN.md) | Full design document (1,100+ lines) |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Technical architecture (10 components) |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Technical architecture |
 | [COMPARISON.md](COMPARISON.md) | vs Mem0, Letta, Engram, agentmemory |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 | [CHANGELOG.md](CHANGELOG.md) | Release notes |
-| [openapi.yaml](openapi.yaml) | OpenAPI 3.1 spec (30+ endpoints) |
+| [openapi.yaml](openapi.yaml) | OpenAPI spec |
 
 ---
 

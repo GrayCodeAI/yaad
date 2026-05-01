@@ -7,30 +7,30 @@ Thank you for your interest in contributing! Yaad is a memory layer for coding a
 ```bash
 git clone https://github.com/GrayCodeAI/yaad
 cd yaad
-go build ./...          # verify it builds
-go test -count=1 ./...  # run tests
+make build    # verify it builds
+make test     # run tests
 ```
 
-**Requirements:** Go 1.23+. No CGO, no C compiler needed.
+**Requirements:** Go 1.25+. No CGO, no C compiler needed.
 
 ## What to Work On
 
-Check [open issues](https://github.com/GrayCodeAI/yaad/issues) or pick from the roadmap in [PLAN.md](PLAN.md).
+Check [open issues](https://github.com/GrayCodeAI/yaad/issues) for things to pick up.
 
 Good first issues:
-- Add a new agent to `internal/agentconfig/generator.go`
 - Improve entity extraction patterns in `internal/engine/entities.go`
 - Add a new memory node type
-- Improve the TUI screens in `internal/tui/tui.go`
+- Improve privacy filter patterns in `internal/privacy/filter.go`
+- Add export formats in `internal/exportimport/export.go`
 
 ## Development
 
 ```bash
 # Build
-CGO_ENABLED=0 go build -o yaad ./cmd/yaad
+make build
 
-# Test (run multiple times to catch flakiness)
-CGO_ENABLED=0 go test -count=3 ./...
+# Test
+make test
 
 # Lint
 go vet ./...
@@ -41,22 +41,37 @@ go vet ./...
 1. **One thing per PR** — keep it focused
 2. **Tests required** — add a test for new functionality
 3. **No CGO** — Yaad must build with `CGO_ENABLED=0`
-4. **No LLM API calls** — Yaad is a memory layer, not an LLM client. The coding agent handles LLM calls.
+4. **No LLM API calls in hot paths** — Yaad is a memory layer, not an LLM client
 5. **Keep it minimal** — avoid unnecessary abstractions
+6. **Localhost-only** — REST server must never bind to public interfaces
 
 ## Architecture
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full technical design.
 
-Key principle: **Yaad is a memory layer.** It stores, retrieves, and organizes memories. It does NOT call LLM APIs. The coding agent (Hawk, Claude Code, Cursor, etc.) handles all LLM interactions.
+Key principles:
+- **Yaad is a memory layer.** It stores, retrieves, and organizes memories.
+- **MCP-first.** The primary integration is via MCP stdio — agents call `yaad mcp`.
+- **Single-user.** No auth, no multi-tenancy. One developer, one machine.
+- **Pure Go.** No CGO, no external dependencies at runtime.
 
-## Adding a New Agent
+## Project Structure
 
-Edit `internal/agentconfig/generator.go`:
-1. Add a constant: `AgentMyAgent Agent = "my-agent"`
-2. Add a case in `Generate()` — either use `generateGenericMCP()` or write a custom generator
-3. Add to the CLI help text in `cmd/yaad/main.go`
-4. Add to the README agent table
+```
+cmd/yaad/           CLI entry point (cobra commands)
+internal/
+  engine/           Core memory engine (remember, recall, context, decay)
+  graph/            DAG operations (BFS, impact, ancestors, subgraph)
+  storage/          SQLite storage layer (FTS5, WAL mode)
+  server/           REST API + MCP server
+  hooks/            Auto-capture hooks (session lifecycle)
+  compact/          Memory compaction (summarize old memories)
+  config/           TOML config loading
+  privacy/          Secret detection and redaction
+  skill/            Procedural memory (reusable step sequences)
+  git/              Git-aware staleness detection
+  embeddings/       Vector embedding providers (OpenAI, Voyage, local stub)
+```
 
 ## License
 

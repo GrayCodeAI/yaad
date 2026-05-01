@@ -4,15 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
-	"time"
 
-	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/cobra"
 	"github.com/GrayCodeAI/yaad/internal/hooks"
 	"github.com/GrayCodeAI/yaad/internal/skill"
 	"github.com/GrayCodeAI/yaad/internal/utils"
-	yaadsync "github.com/GrayCodeAI/yaad/internal/sync"
 	intentpkg "github.com/GrayCodeAI/yaad/internal/intent"
 )
 
@@ -72,105 +68,6 @@ var replayCmd = &cobra.Command{
 	},
 }
 
-var syncCmd = &cobra.Command{
-	Use:   "sync",
-	Short: "Sync memories via git chunks (.yaad/chunks/*.jsonl.gz)",
-	Long: `Export new memories as a chunk and import chunks from teammates.
-Chunks are append-only gzipped JSONL files — no merge conflicts.
-Commit .yaad/manifest.json and .yaad/chunks/ to share with your team.`,
-	Run: func(cmd *cobra.Command, args []string) {
-		dir, _ := os.Getwd()
-		eng := openEngine()
-		defer eng.Store().Close()
-
-		statusOnly, _ := cmd.Flags().GetBool("status")
-		importOnly, _ := cmd.Flags().GetBool("import")
-
-		syncer := yaadsync.New(eng.Store(), dir)
-
-		if statusOnly {
-			st, err := syncer.Status()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				os.Exit(1)
-			}
-			fmt.Printf("Sync status:\n  Total chunks:    %d\n  Imported chunks: %d\n  Pending chunks:  %d\n",
-				st.TotalChunks, st.ImportedChunks, st.PendingChunks)
-			return
-		}
-
-		n, e, err := syncer.Import(context.Background())
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "import error: %v\n", err)
-		} else if n > 0 || e > 0 {
-			fmt.Printf("✓ Imported %d nodes, %d edges from chunks\n", n, e)
-		}
-
-		if importOnly {
-			return
-		}
-
-		hash, err := syncer.Export(context.Background(), dir)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "export error: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("✓ Exported chunk %s → .yaad/chunks/%s.jsonl.gz\n", hash, hash)
-		fmt.Printf("  Commit .yaad/manifest.json and .yaad/chunks/ to share with your team\n")
-	},
-}
-
-var watchCmd = &cobra.Command{
-	Use:   "watch",
-	Short: "Watch for team sync changes and auto-import",
-	Long:  "Watches .yaad/manifest.json for changes and auto-runs 'yaad sync --import' when teammates push new chunks.",
-	Run: func(cmd *cobra.Command, args []string) {
-		dir, _ := os.Getwd()
-		manifest := filepath.Join(dir, ".yaad", "manifest.json")
-		fmt.Printf("Watching %s for team sync changes...\n", manifest)
-		fmt.Println("Press Ctrl+C to stop.")
-
-		watcher, err := fsnotify.NewWatcher()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error creating watcher: %v\n", err)
-			os.Exit(1)
-		}
-		defer watcher.Close()
-
-		if err := watcher.Add(manifest); err != nil {
-			fmt.Fprintf(os.Stderr, "error watching manifest: %v\n", err)
-			os.Exit(1)
-		}
-
-		for {
-			select {
-			case event, ok := <-watcher.Events:
-				if !ok {
-					return
-				}
-				if event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Create == fsnotify.Create {
-					fmt.Printf("[%s] manifest.json changed — importing...\n", time.Now().Format("15:04:05"))
-					eng := openEngine()
-					syncer := yaadsync.New(eng.Store(), dir)
-					n, e, err := syncer.Import(context.Background())
-					eng.Store().Close()
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "import error: %v\n", err)
-					} else if n > 0 || e > 0 {
-						fmt.Printf("  ✓ Imported %d nodes, %d edges\n", n, e)
-					} else {
-						fmt.Println("  (no new chunks)")
-					}
-				}
-			case err, ok := <-watcher.Errors:
-				if !ok {
-					return
-				}
-				fmt.Fprintf(os.Stderr, "watch error: %v\n", err)
-			}
-		}
-	},
-}
 
 var intentCmd = &cobra.Command{
 	Use:   "intent [query]",

@@ -207,37 +207,6 @@ func TestRequestBodyLimit(t *testing.T) {
 	}
 }
 
-func TestRateLimit(t *testing.T) {
-	srv, _, cleanup := setupTestServer(t)
-	defer cleanup()
-
-	mux := http.NewServeMux()
-	srv.RegisterRoutes(mux)
-	wrapped := srv.withRateLimit(mux)
-
-	// First request should succeed
-	req := httptest.NewRequest("GET", "/yaad/health", nil)
-	rr := httptest.NewRecorder()
-	wrapped.ServeHTTP(rr, req)
-	if rr.Code != 200 {
-		t.Fatalf("first request: expected 200, got %d", rr.Code)
-	}
-
-	// Rapid burst should eventually hit limit
-	limited := false
-	for i := 0; i < 50; i++ {
-		req = httptest.NewRequest("GET", "/yaad/health", nil)
-		rr = httptest.NewRecorder()
-		wrapped.ServeHTTP(rr, req)
-		if rr.Code == 429 {
-			limited = true
-			break
-		}
-	}
-	if !limited {
-		t.Error("expected rate limit to trigger after burst")
-	}
-}
 
 func TestShutdown(t *testing.T) {
 	srv, _, cleanup := setupTestServer(t)

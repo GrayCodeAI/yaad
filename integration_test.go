@@ -15,25 +15,20 @@ import (
 	"time"
 
 	"github.com/GrayCodeAI/yaad/internal/bench"
-	"github.com/GrayCodeAI/yaad/internal/boundary"
 	"github.com/GrayCodeAI/yaad/internal/config"
 	"github.com/GrayCodeAI/yaad/internal/embeddings"
-	"github.com/GrayCodeAI/yaad/internal/encrypt"
 	"github.com/GrayCodeAI/yaad/internal/engine"
 	"github.com/GrayCodeAI/yaad/internal/exportimport"
 	"github.com/GrayCodeAI/yaad/internal/graph"
 	"github.com/GrayCodeAI/yaad/internal/hooks"
 	"github.com/GrayCodeAI/yaad/internal/ingest"
 	intentpkg "github.com/GrayCodeAI/yaad/internal/intent"
-	"github.com/GrayCodeAI/yaad/internal/multiproject"
 	"github.com/GrayCodeAI/yaad/internal/profile"
 	"github.com/GrayCodeAI/yaad/internal/server"
 	"github.com/GrayCodeAI/yaad/internal/skill"
 	"github.com/GrayCodeAI/yaad/internal/storage"
-	"github.com/GrayCodeAI/yaad/internal/team"
 	yaadtls "github.com/GrayCodeAI/yaad/internal/tls"
 	"github.com/GrayCodeAI/yaad/internal/utils"
-	yaadsync "github.com/GrayCodeAI/yaad/internal/sync"
 )
 
 func setup(t *testing.T) (*engine.Engine, func()) {
@@ -309,29 +304,6 @@ func TestPhase4HooksAndReplay(t *testing.T) {
 	}
 }
 
-func TestPhase4SSEBroker(t *testing.T) {
-	broker := server.NewSSEBroker()
-
-	// Publish without subscribers — should not panic
-	broker.Publish("test", map[string]string{"key": "value"})
-
-	// Verify SSE endpoint responds with 200 and SSE headers
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // cancel immediately so handler exits
-	req, _ := http.NewRequestWithContext(ctx, "GET", "/yaad/events", nil)
-	w := httptest.NewRecorder()
-	broker.ServeHTTP(w, req)
-	// Either 200 (flusher supported) or 500 (not supported) — both are valid
-	if w.Code != 200 && w.Code != 500 {
-		t.Errorf("unexpected status: %d", w.Code)
-	}
-	if w.Code == 200 {
-		ct := w.Header().Get("Content-Type")
-		if ct != "text/event-stream" {
-			t.Errorf("expected text/event-stream, got %s", ct)
-		}
-	}
-}
 
 func TestPhase5ExportImport(t *testing.T) {
 	eng, cleanup := setup(t)
@@ -418,34 +390,6 @@ func TestPhase5Skills(t *testing.T) {
 	}
 }
 
-func TestPhase5TeamMemory(t *testing.T) {
-	eng, cleanup := setup(t)
-	defer cleanup()
-
-	node, _ := eng.Remember(context.Background(), engine.RememberInput{
-		Type: "convention", Content: "Use TypeScript strict mode", Scope: "project",
-	})
-
-	// Share to team
-	shared, err := team.Share(context.Background(), eng.Store(), eng.Store(), team.ShareInput{
-		NodeID: node.ID, TeamID: "team-alpha", SharedBy: "alice",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if shared.ID == node.ID {
-		t.Error("shared node should have new ID")
-	}
-
-	// List team memories
-	memories, err := team.ListTeamMemories(context.Background(), eng.Store(), "team-alpha")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(memories) == 0 {
-		t.Error("team memories: expected > 0")
-	}
-}
 
 func TestPhase5Benchmark(t *testing.T) {
 	eng, cleanup := setup(t)
@@ -467,67 +411,6 @@ func TestPhase5Benchmark(t *testing.T) {
 	t.Logf("Benchmark:\n%s", result.String())
 }
 
-func TestGitSync(t *testing.T) {
-	eng, cleanup := setup(t)
-	defer cleanup()
-
-	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, ".yaad"), 0755)
-
-	eng.Remember(context.Background(), engine.RememberInput{Type: "convention", Content: "Use jose not jsonwebtoken", Scope: "project"})
-	eng.Remember(context.Background(), engine.RememberInput{Type: "decision", Content: "Chose RS256 for JWT", Scope: "project"})
-
-	syncer := yaadsync.New(eng.Store(), dir)
-
-	// Export
-	hash, err := syncer.Export(context.Background(), "")
-	if err != nil {
-		t.Fatalf("Export: %v", err)
-	}
-	if hash == "" {
-		t.Error("Export: empty hash")
-	}
-
-	// Verify chunk file exists
-	chunkFile := filepath.Join(dir, ".yaad", "chunks", hash+".jsonl.gz")
-	if _, err := os.Stat(chunkFile); err != nil {
-		t.Errorf("chunk file not created: %v", err)
-	}
-
-	// Verify manifest exists
-	manifestFile := filepath.Join(dir, ".yaad", "manifest.json")
-	if _, err := os.Stat(manifestFile); err != nil {
-		t.Errorf("manifest.json not created: %v", err)
-	}
-
-	// Status
-	st, err := syncer.Status()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if st.TotalChunks != 1 {
-		t.Errorf("expected 1 chunk, got %d", st.TotalChunks)
-	}
-
-	// Import into fresh store
-	eng2, cleanup2 := setup(t)
-	defer cleanup2()
-	syncer2 := yaadsync.New(eng2.Store(), dir)
-	n, e, err := syncer2.Import(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n == 0 {
-		t.Error("Import: expected nodes > 0")
-	}
-	t.Logf("Imported %d nodes, %d edges", n, e)
-
-	// Second import should be idempotent (already imported)
-	n2, e2, _ := syncer2.Import(context.Background())
-	if n2 != 0 || e2 != 0 {
-		t.Errorf("second import should be idempotent, got %d nodes %d edges", n2, e2)
-	}
-}
 
 func TestUserProfile(t *testing.T) {
 	eng, cleanup := setup(t)
@@ -785,34 +668,6 @@ func TestPhase6DualStream(t *testing.T) {
 	}
 }
 
-func TestPhase6BoundaryDetector(t *testing.T) {
-	// Test buffer overflow boundary (deterministic)
-	det := boundary.New(3, 0.99) // very high threshold, only overflow triggers
-	det.Add("item 1 about auth")
-	det.Add("item 2 about auth")
-	if !det.Add("item 3 about auth") {
-		t.Error("buffer overflow should trigger boundary")
-	}
-
-	// Test flush
-	det2 := boundary.New(10, 0.3)
-	det2.Add("content about authentication")
-	det2.Add("more about JWT tokens")
-	buf := det2.Flush()
-	if len(buf) != 2 {
-		t.Errorf("flush: expected 2 items, got %d", len(buf))
-	}
-	if det2.Size() != 0 {
-		t.Error("flush: buffer should be empty after flush")
-	}
-
-	// Test semantic distance detection (non-deterministic, just verify no panic)
-	det3 := boundary.New(20, 0.3)
-	det3.Add("Use jose for JWT authentication in Node.js")
-	det3.Add("PostgreSQL database connection pooling configuration")
-	// May or may not trigger — just verify it runs without error
-	t.Logf("Boundary detector size after 2 items: %d", det3.Size())
-}
 
 func TestPrivacyFilter(t *testing.T) {
 	eng, cleanup := setup(t)
@@ -835,37 +690,6 @@ func TestPrivacyFilter(t *testing.T) {
 	}
 }
 
-func TestEncryption(t *testing.T) {
-	dir := t.TempDir()
-	testFile := filepath.Join(dir, "test.txt")
-	os.WriteFile(testFile, []byte("hello world secret data"), 0644)
-
-	// Generate key
-	key, err := encrypt.GenerateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if key == "" {
-		t.Error("encrypt: empty key")
-	}
-
-	// Encrypt
-	if err := encrypt.EncryptFile(testFile, key); err != nil {
-		t.Fatal(err)
-	}
-	if !encrypt.IsEncrypted(testFile) {
-		t.Error("encrypt: file should appear encrypted")
-	}
-
-	// Decrypt
-	if err := encrypt.DecryptFile(testFile, key); err != nil {
-		t.Fatal(err)
-	}
-	data, _ := os.ReadFile(testFile)
-	if string(data) != "hello world secret data" {
-		t.Errorf("encrypt: decrypted content mismatch: %s", data)
-	}
-}
 
 func TestUtilsShortID(t *testing.T) {
 	cases := []struct{ input, expected string }{
@@ -980,29 +804,6 @@ func TestMultipleRememberAndRecall(t *testing.T) {
 	}
 }
 
-func TestMultiProject(t *testing.T) {
-	// Create two separate stores (simulating two projects)
-	eng1, cleanup1 := setup(t)
-	defer cleanup1()
-	eng2, cleanup2 := setup(t)
-	defer cleanup2()
-
-	// Store in project 1
-	eng1.Remember(context.Background(), engine.RememberInput{Type: "convention", Content: "Use jose for JWT", Scope: "project", Project: "proj1"})
-
-	// Store in project 2
-	eng2.Remember(context.Background(), engine.RememberInput{Type: "convention", Content: "Use PostgreSQL for DB", Scope: "project", Project: "proj2"})
-
-	// Cross-project search
-	stores := []storage.Storage{eng1.Store(), eng2.Store()}
-	results, err := multiproject.CrossProjectSearch(context.Background(), stores, "jose", 5)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(results) == 0 {
-		t.Error("multiproject: cross-project search returned no results")
-	}
-}
 
 func TestTLSCertGeneration(t *testing.T) {
 	dir := t.TempDir()
@@ -1032,9 +833,6 @@ func TestConfigDefaults(t *testing.T) {
 	cfg := config.Default()
 	if cfg.Server.Port != 3456 {
 		t.Errorf("config: expected port 3456, got %d", cfg.Server.Port)
-	}
-	if cfg.Server.GRPCPort != 3457 {
-		t.Errorf("config: expected grpc port 3457, got %d", cfg.Server.GRPCPort)
 	}
 	if cfg.Decay.HalfLifeDays != 30 {
 		t.Errorf("config: expected half_life 30, got %d", cfg.Decay.HalfLifeDays)

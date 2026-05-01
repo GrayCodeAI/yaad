@@ -28,9 +28,179 @@ var initCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		store.Close()
+
+		// Write default config if it doesn't exist
+		configPath := filepath.Join(yaadDir, "config.toml")
+		if _, err := os.Stat(configPath); os.IsNotExist(err) {
+			os.WriteFile(configPath, []byte(defaultConfigTOML), 0644)
+		}
+
+		// Append .yaad/ to .gitignore if not already present
+		ensureGitignore(dir)
+
 		fmt.Printf("✓ Initialized .yaad/ in %s\n", dir)
+		fmt.Println("  Next: run 'yaad setup' to configure Hawk")
 	},
 }
+
+var setupCmd = &cobra.Command{
+	Use:   "setup",
+	Short: "Configure Hawk to use Yaad as its memory layer",
+	Run: func(cmd *cobra.Command, args []string) {
+		dir, _ := os.Getwd()
+
+		// Write .mcp.json for Hawk
+		mcpPath := filepath.Join(dir, ".mcp.json")
+		if _, err := os.Stat(mcpPath); err == nil {
+			fmt.Println("  .mcp.json already exists (skipped)")
+		} else {
+			content := fmt.Sprintf(`{
+  "mcpServers": {
+    "yaad": {
+      "command": "yaad",
+      "args": ["mcp"],
+      "cwd": %q
+    }
+  }
+}
+`, dir)
+			if err := os.WriteFile(mcpPath, []byte(content), 0644); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("✓ Created .mcp.json (Hawk MCP config)")
+		}
+
+		// Write hooks config for Hawk auto-capture
+		hooksDir := filepath.Join(dir, ".hawk")
+		os.MkdirAll(hooksDir, 0755)
+		hooksPath := filepath.Join(hooksDir, "hooks.json")
+		if _, err := os.Stat(hooksPath); err == nil {
+			fmt.Println("  .hawk/hooks.json already exists (skipped)")
+		} else {
+			hooksContent := `{
+  "hooks": {
+    "session-start": "yaad hook session-start",
+    "post-tool-use": "yaad hook post-tool-use",
+    "session-end": "yaad hook session-end"
+  }
+}
+`
+			if err := os.WriteFile(hooksPath, []byte(hooksContent), 0644); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("✓ Created .hawk/hooks.json (auto-capture hooks)")
+		}
+
+		// Write system prompt for Hawk
+		systemPath := filepath.Join(hooksDir, "system.md")
+		if _, err := os.Stat(systemPath); err == nil {
+			fmt.Println("  .hawk/system.md already exists (skipped)")
+		} else {
+			if err := os.WriteFile(systemPath, []byte(hawkSystemPrompt), 0644); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("✓ Created .hawk/system.md (Hawk memory instructions)")
+		}
+
+		fmt.Println("\nYaad is ready for Hawk. Memory will auto-capture during sessions.")
+	},
+}
+
+const hawkSystemPrompt = `# Yaad Memory System
+
+You have access to a persistent memory graph via yaad MCP tools. Use it to maintain continuity across sessions.
+
+## When to recall
+
+- **Session start**: Call yaad_session_recap to see what happened last session.
+- **Before implementation**: Call yaad_recall with relevant keywords to check for existing conventions, past decisions, or known bugs.
+- **When asked "why"**: Call yaad_recall to find the decision history.
+- **Before changing patterns**: Check yaad_mental_model to understand current project conventions.
+
+## When to remember
+
+- **After making a decision**: yaad_remember with type "decision" — capture the WHY, not just the what.
+- **When establishing a pattern**: yaad_remember with type "convention" — future sessions need to follow it.
+- **When finding a bug**: yaad_remember with type "bug" — include root cause and fix.
+- **When learning user preferences**: yaad_remember with type "preference".
+- **Multi-step procedures**: yaad_skill_store to save repeatable workflows.
+
+## When to link
+
+- **Cause/effect**: yaad_link with type "caused_by" or "led_to" when one decision leads to another.
+- **Contradiction**: yaad_link with type "supersedes" when a new convention replaces an old one.
+- **Dependency**: yaad_link with type "depends_on" for task dependencies.
+
+## When to pin
+
+- **Critical facts**: yaad_pin nodes that must ALWAYS appear in context (API keys location, deploy process, core architecture decisions).
+
+## When to forget
+
+- **Outdated info**: yaad_feedback with action "discard" for stale memories.
+- **Corrections**: yaad_feedback with action "edit" to fix wrong memories.
+
+## What NOT to remember
+
+- Ephemeral file contents (they change constantly)
+- Obvious things derivable from code (function signatures, imports)
+- Conversation-specific context that won't matter next session
+
+## Tips
+
+- Keep memory content concise (1-2 sentences). The WHY is more valuable than the WHAT.
+- Use yaad_proactive at session start for predicted relevant context.
+- Use yaad_stale periodically to find memories that may be outdated.
+- Use yaad_compact when the graph grows large.
+`
+
+func ensureGitignore(dir string) {
+	gitignorePath := filepath.Join(dir, ".gitignore")
+	content, _ := os.ReadFile(gitignorePath)
+	if strings.Contains(string(content), ".yaad/") {
+		return
+	}
+	f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	if len(content) > 0 && !strings.HasSuffix(string(content), "\n") {
+		f.WriteString("\n")
+	}
+	f.WriteString("\n# Yaad memory (local-only)\n.yaad/\n")
+}
+
+const defaultConfigTOML = `# Yaad configuration
+# See: https://github.com/GrayCodeAI/yaad
+
+[server]
+port = 3456
+host = "127.0.0.1"
+
+[memory]
+hot_token_budget = 800
+warm_token_budget = 800
+max_memories = 10000
+
+[search]
+bm25_weight = 0.5
+vector_weight = 0.5
+default_limit = 10
+
+[decay]
+enabled = true
+half_life_days = 30
+min_confidence = 0.1
+boost_on_access = 0.2
+
+[git]
+watch = true
+auto_stale = true
+`
 
 var rememberCmd = &cobra.Command{
 	Use:   "remember [content]",

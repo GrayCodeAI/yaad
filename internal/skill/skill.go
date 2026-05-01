@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/google/uuid"
 	"github.com/GrayCodeAI/yaad/internal/engine"
 	"github.com/GrayCodeAI/yaad/internal/storage"
 )
@@ -107,6 +106,3 @@ func addTag(tags, tag string) string {
 	}
 	return tags + "," + tag
 }
-
-// NewSkillID generates a unique skill ID.
-func NewSkillID() string { return uuid.New().String()[:8] }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	stdtls "crypto/tls"
 	"time"
 
@@ -16,10 +17,10 @@ import (
 	"github.com/GrayCodeAI/yaad/internal/embeddings"
 	"github.com/GrayCodeAI/yaad/internal/engine"
 	"github.com/GrayCodeAI/yaad/internal/exportimport"
+	gitwatch "github.com/GrayCodeAI/yaad/internal/git"
 	"github.com/GrayCodeAI/yaad/internal/graph"
 	"github.com/GrayCodeAI/yaad/internal/skill"
 	"github.com/GrayCodeAI/yaad/internal/storage"
-	"github.com/GrayCodeAI/yaad/internal/team"
 	"github.com/GrayCodeAI/yaad/internal/version"
 )
 
@@ -30,18 +31,23 @@ const (
 
 // RESTServer serves the HTTP API.
 type RESTServer struct {
-	eng      *engine.Engine
-	addr     string
-	tlsCfg   *stdtls.Config
-	embedder embeddings.Provider // nil = no vector search
-	SSE      *SSEBroker
-	srv      *http.Server
-	limiter  *RateLimiter
+	eng        *engine.Engine
+	addr       string
+	projectDir string
+	tlsCfg     *stdtls.Config
+	embedder   embeddings.Provider // nil = no vector search
+	srv        *http.Server
 }
 
 // NewRESTServer creates a REST server.
 func NewRESTServer(eng *engine.Engine, addr string) *RESTServer {
-	return &RESTServer{eng: eng, addr: addr, SSE: NewSSEBroker()}
+	return &RESTServer{eng: eng, addr: addr}
+}
+
+// WithProjectDir sets the project directory for git-based staleness detection.
+func (s *RESTServer) WithProjectDir(dir string) *RESTServer {
+	s.projectDir = dir
+	return s
 }
 
 // WithEmbedder sets the embedding provider for vector search.
@@ -60,21 +66,13 @@ func (s *RESTServer) WithTLS(cfg *stdtls.Config) *RESTServer {
 func (s *RESTServer) ListenAndServe() error {
 	mux := http.NewServeMux()
 	s.RegisterRoutes(mux)
-	rateLimited := s.withRateLimit(mux)
-	// Exclude SSE from TimeoutHandler — SSE connections are long-lived
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/yaad/events" {
-			s.withMiddleware(rateLimited).ServeHTTP(w, r)
-			return
-		}
-		http.TimeoutHandler(s.withMiddleware(rateLimited), 30*time.Second, `{"error":"request timeout"}`).ServeHTTP(w, r)
-	})
+	handler := http.TimeoutHandler(s.withMiddleware(mux), 30*time.Second, `{"error":"request timeout"}`)
 	s.srv = &http.Server{
 		Addr:         s.addr,
 		Handler:      handler,
 		TLSConfig:    s.tlsCfg,
 		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 0, // SSE requires no write timeout; per-request timeouts handle non-SSE
+		WriteTimeout: 35 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
 	if s.tlsCfg != nil {
@@ -91,19 +89,20 @@ func (s *RESTServer) ListenAndServe() error {
 
 // Shutdown gracefully shuts down the REST server with a timeout.
 func (s *RESTServer) Shutdown(ctx context.Context) error {
-	if s.limiter != nil {
-		s.limiter.Stop()
-	}
 	if s.srv == nil {
 		return nil
 	}
 	return s.srv.Shutdown(ctx)
 }
 
-// withMiddleware wraps the handler with panic recovery and request logging.
+// withMiddleware wraps the handler with panic recovery, security headers, and request logging.
 func (s *RESTServer) withMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+		// Security headers
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Cache-Control", "no-store")
 		// Limit request body size
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
 		// Panic recovery
@@ -126,6 +125,8 @@ func (s *RESTServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /yaad/link", s.handleLink)
 	mux.HandleFunc("DELETE /yaad/link/{id}", s.handleDeleteLink)
 	mux.HandleFunc("GET /yaad/node/{id}", s.handleGetNode)
+	mux.HandleFunc("PATCH /yaad/node/{id}", s.handleUpdateNode)
+	mux.HandleFunc("POST /yaad/pin/{id}", s.handlePinNode)
 	mux.HandleFunc("GET /yaad/subgraph/{id}", s.handleSubgraph)
 	mux.HandleFunc("GET /yaad/impact/{file...}", s.handleImpact)
 	mux.HandleFunc("DELETE /yaad/forget/{id}", s.handleForget)
@@ -142,15 +143,12 @@ func (s *RESTServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /yaad/feedback", s.handleFeedback)
 	mux.HandleFunc("POST /yaad/decay", s.handleDecay)
 	mux.HandleFunc("POST /yaad/gc", s.handleGC)
-	mux.HandleFunc("GET /yaad/events", s.SSE.ServeHTTP)
 	mux.HandleFunc("GET /yaad/replay/{session_id}", s.handleReplay)
 	ServeDashboard(mux)
 	mux.HandleFunc("POST /yaad/export/json", s.handleExportJSON)
 	mux.HandleFunc("POST /yaad/export/markdown", s.handleExportMarkdown)
 	mux.HandleFunc("POST /yaad/export/obsidian", s.handleExportObsidian)
 	mux.HandleFunc("POST /yaad/import/json", s.handleImportJSON)
-	mux.HandleFunc("POST /yaad/team/share", s.handleTeamShare)
-	mux.HandleFunc("GET /yaad/team/memories", s.handleTeamMemories)
 	mux.HandleFunc("POST /yaad/skill/store", s.handleSkillStore)
 	mux.HandleFunc("GET /yaad/skill/list", s.handleSkillList)
 	mux.HandleFunc("GET /yaad/skill/{name}", s.handleSkillGet)
@@ -180,8 +178,6 @@ func (s *RESTServer) handleRemember(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, err, 500)
 		return
 	}
-	// Broadcast to SSE clients
-	s.SSE.Publish("memory.created", node)
 	httpJSON(w, node, 201)
 }
 
@@ -312,6 +308,81 @@ func (s *RESTServer) handleForget(w http.ResponseWriter, r *http.Request) {
 	httpJSON(w, map[string]string{"status": "forgotten"}, 200)
 }
 
+func (s *RESTServer) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	node, err := s.eng.Store().GetNode(r.Context(), id)
+	if err != nil {
+		httpErr(w, err, 404)
+		return
+	}
+
+	var patch struct {
+		Content *string `json:"content"`
+		Summary *string `json:"summary"`
+		Tags    *string `json:"tags"`
+		Key     *string `json:"key"`
+		Pinned  *bool   `json:"pinned"`
+		Type    *string `json:"type"`
+		Tier    *int    `json:"tier"`
+	}
+	if err := decodeJSON(r, &patch); err != nil {
+		httpErr(w, err, 400)
+		return
+	}
+
+	// Save version before modifying
+	if patch.Content != nil && *patch.Content != node.Content {
+		_ = s.eng.Store().SaveVersion(r.Context(), node.ID, node.Content, "api", "updated via PATCH")
+	}
+
+	if patch.Content != nil {
+		node.Content = *patch.Content
+	}
+	if patch.Summary != nil {
+		node.Summary = *patch.Summary
+	}
+	if patch.Tags != nil {
+		node.Tags = *patch.Tags
+	}
+	if patch.Key != nil {
+		node.Key = *patch.Key
+	}
+	if patch.Pinned != nil {
+		node.Pinned = *patch.Pinned
+	}
+	if patch.Type != nil {
+		if !engine.IsValidNodeType(*patch.Type) {
+			httpErr(w, fmt.Errorf("invalid node type: %q", *patch.Type), 400)
+			return
+		}
+		node.Type = *patch.Type
+	}
+	if patch.Tier != nil {
+		node.Tier = *patch.Tier
+	}
+	node.Version++
+	if err := s.eng.Store().UpdateNode(r.Context(), node); err != nil {
+		httpErr(w, err, 500)
+		return
+	}
+	httpJSON(w, node, 200)
+}
+
+func (s *RESTServer) handlePinNode(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	node, err := s.eng.Store().GetNode(r.Context(), id)
+	if err != nil {
+		httpErr(w, err, 404)
+		return
+	}
+	node.Pinned = !node.Pinned
+	if err := s.eng.Store().UpdateNode(r.Context(), node); err != nil {
+		httpErr(w, err, 500)
+		return
+	}
+	httpJSON(w, map[string]any{"id": node.ID, "pinned": node.Pinned}, 200)
+}
+
 func (s *RESTServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// Actually verify database connectivity with a lightweight query
 	_, err := s.eng.Store().ListNodes(r.Context(), storage.NodeFilter{})
@@ -371,7 +442,10 @@ func (s *RESTServer) handleSessionStart(w http.ResponseWriter, r *http.Request) 
 		httpErr(w, err, 500)
 		return
 	}
-	ctxRes, _ := s.eng.Context(r.Context(), body.Project)
+	ctxRes, err := s.eng.Context(r.Context(), body.Project)
+	if err != nil {
+		slog.Warn("session start: context load failed", "error", err)
+	}
 	httpJSON(w, map[string]any{"session": sess, "context": ctxRes}, 201)
 }
 
@@ -396,8 +470,19 @@ func (s *RESTServer) handleSessionEnd(w http.ResponseWriter, r *http.Request) {
 	httpJSON(w, map[string]string{"status": "ended"}, 200)
 }
 
-func (s *RESTServer) handleStale(w http.ResponseWriter, _ *http.Request) {
-	httpJSON(w, map[string]string{"status": "staleness detection available in Phase 2"}, 200)
+func (s *RESTServer) handleStale(w http.ResponseWriter, r *http.Request) {
+	if s.projectDir == "" {
+		httpJSON(w, map[string]string{"status": "no project directory configured"}, 200)
+		return
+	}
+	watcher := gitwatch.New(s.eng.Store(), s.eng.Graph(), s.projectDir)
+	since := time.Now().Add(-7 * 24 * time.Hour) // last 7 days
+	reports, err := watcher.StalesSince(r.Context(), since)
+	if err != nil {
+		httpErr(w, err, 500)
+		return
+	}
+	httpJSON(w, reports, 200)
 }
 
 func (s *RESTServer) handleEmbed(w http.ResponseWriter, r *http.Request) {
@@ -557,7 +642,17 @@ func (s *RESTServer) handleExportObsidian(w http.ResponseWriter, r *http.Request
 		}
 		return
 	}
-	n, err := exportimport.ExportObsidian(r.Context(), s.eng.Store(), body.Project, body.VaultDir)
+	if body.VaultDir == "" {
+		httpErr(w, fmt.Errorf("vault_dir is required"), 400)
+		return
+	}
+	// Prevent path traversal — vault_dir must be absolute and not contain ..
+	cleanPath := filepath.Clean(body.VaultDir)
+	if cleanPath != body.VaultDir || !filepath.IsAbs(cleanPath) {
+		httpErr(w, fmt.Errorf("vault_dir must be a clean absolute path"), 400)
+		return
+	}
+	n, err := exportimport.ExportObsidian(r.Context(), s.eng.Store(), body.Project, cleanPath)
 	if err != nil {
 		httpErr(w, err, 500)
 		return
@@ -579,35 +674,6 @@ func (s *RESTServer) handleImportJSON(w http.ResponseWriter, r *http.Request) {
 	httpJSON(w, map[string]int{"nodes": nodes, "edges": edges}, 200)
 }
 
-func (s *RESTServer) handleTeamShare(w http.ResponseWriter, r *http.Request) {
-	var body team.ShareInput
-	if err := decodeJSON(r, &body); err != nil {
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
-			httpErr(w, err, 413)
-		} else {
-			httpErr(w, err, 400)
-		}
-		return
-	}
-	// For simplicity, share within the same store (global scope)
-	node, err := team.Share(r.Context(), s.eng.Store(), s.eng.Store(), body)
-	if err != nil {
-		httpErr(w, err, 500)
-		return
-	}
-	httpJSON(w, node, 201)
-}
-
-func (s *RESTServer) handleTeamMemories(w http.ResponseWriter, r *http.Request) {
-	teamID := r.URL.Query().Get("team_id")
-	nodes, err := team.ListTeamMemories(r.Context(), s.eng.Store(), teamID)
-	if err != nil {
-		httpErr(w, err, 500)
-		return
-	}
-	httpJSON(w, nodes, 200)
-}
 
 func (s *RESTServer) handleSkillStore(w http.ResponseWriter, r *http.Request) {
 	var sk skill.Skill

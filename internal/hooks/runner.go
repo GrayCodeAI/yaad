@@ -74,10 +74,13 @@ func (r *Runner) SessionStart(ctx context.Context, in *HookInput) error {
 	}
 
 	// Write session ID to a temp file for other hooks to pick up
-	if err := os.WriteFile(sessionFile(r.project), []byte(sessionID), 0644); err != nil {
+	if err := os.WriteFile(sessionFile(r.project), []byte(sessionID), 0600); err != nil {
 		// Best-effort: log but don't fail the hook
 		fmt.Fprintf(os.Stderr, "yaad: warning: could not write session file: %v\n", err)
 	}
+
+	// Auto-decay: keep graph lean without manual intervention
+	_ = engine.RunDecay(ctx, r.eng.Store(), engine.DefaultDecayConfig)
 
 	// Get context and print to stdout for injection into the session
 	result, err := r.eng.Context(ctx, r.project)
@@ -91,6 +94,11 @@ func (r *Runner) SessionStart(ctx context.Context, in *HookInput) error {
 // PostToolUse is called after each tool use. Captures the observation.
 func (r *Runner) PostToolUse(ctx context.Context, in *HookInput) error {
 	if in.ToolName == "" {
+		return nil
+	}
+
+	// Relevance filter: skip low-signal observations to prevent graph pollution
+	if !ShouldCapture(in.ToolName, in.ToolInput, in.ToolOutput, in.ToolError) {
 		return nil
 	}
 

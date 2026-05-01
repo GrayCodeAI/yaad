@@ -20,7 +20,7 @@ var decayCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		eng := openEngine()
 		defer eng.Store().Close()
-		if err := engine.RunDecay(context.Background(), eng.Store(), engine.DefaultDecayConfig); err != nil {
+		if err := engine.RunDecay(context.Background(), eng.Store(), eng.DecayConfig); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
@@ -34,7 +34,7 @@ var gcCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		eng := openEngine()
 		defer eng.Store().Close()
-		n, err := engine.GarbageCollect(context.Background(), eng.Store(), engine.DefaultDecayConfig)
+		n, err := engine.GarbageCollect(context.Background(), eng.Store(), eng.DecayConfig)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
@@ -100,15 +100,11 @@ var doctorCmd = &cobra.Command{
 		}
 		check("REST server running (:3456)", serverRunning, "run: yaad serve  (in another terminal)")
 
-		mcpFiles := []string{".mcp.json", "opencode.json", ".codex/config.yaml"}
-		hasMCP := false
-		for _, f := range mcpFiles {
-			if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
-				hasMCP = true
-				break
-			}
-		}
-		check("agent MCP config found", hasMCP, "run: yaad setup <agent>")
+		_, mcpErr := os.Stat(filepath.Join(dir, ".mcp.json"))
+		check("Hawk MCP config (.mcp.json)", mcpErr == nil, "run: yaad setup")
+
+		_, hooksErr := os.Stat(filepath.Join(dir, ".hawk", "hooks.json"))
+		check("Hawk hooks config (.hawk/hooks.json)", hooksErr == nil, "run: yaad setup")
 
 		_, err = os.Stat(filepath.Join(dir, ".git"))
 		check("git repository (for staleness detection)", err == nil, "run: git init")

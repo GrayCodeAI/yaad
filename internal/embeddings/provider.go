@@ -122,6 +122,10 @@ func (p *voyage) Embed(ctx context.Context, text string) ([]float32, error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("voyage: API returned status %d", resp.StatusCode)
+	}
+
 	var result struct {
 		Data []struct {
 			Embedding []float32 `json:"embedding"`

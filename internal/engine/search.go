@@ -96,10 +96,15 @@ func (h *HybridSearch) Search(ctx context.Context, query string, opts RecallOpts
 
 	// Stage 3: RRF fusion of all 4 paths
 	allIDs := mergeKeys(bm25Ranks, vectorRanks, graphRanks, temporalRanks)
+	nodes, _ := h.store.GetNodesBatch(ctx, allIDs)
+	nodeByID := make(map[string]*storage.Node, len(nodes))
+	for _, n := range nodes {
+		nodeByID[n.ID] = n
+	}
 	scored := make([]*ScoredNode, 0, len(allIDs))
 	for _, id := range allIDs {
-		node, err := h.store.GetNode(ctx, id)
-		if err != nil {
+		node, ok := nodeByID[id]
+		if !ok {
 			continue
 		}
 		if opts.Type != "" && node.Type != opts.Type {

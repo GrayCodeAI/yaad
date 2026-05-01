@@ -11,7 +11,6 @@ package profile
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -150,7 +149,3 @@ func dedup(items []string) []string {
 	}
 	return out
 }
-
-
-// ensure sort is used
-var _ = sort.Strings

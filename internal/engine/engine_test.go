@@ -64,6 +64,21 @@ func (m *mockStorage) GetNode(ctx context.Context, id string) (*storage.Node, er
 	return nil, sql.ErrNoRows
 }
 
+func (m *mockStorage) GetNodeByKey(ctx context.Context, key, project string) (*storage.Node, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, n := range m.nodes {
+		if n.Key == key && n.Project == project {
+			cp := *n
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
 func (m *mockStorage) GetNodesBatch(ctx context.Context, ids []string) ([]*storage.Node, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -215,6 +230,10 @@ func (m *mockStorage) GetEdge(ctx context.Context, id string) (*storage.Edge, er
 		return &cp, nil
 	}
 	return nil, sql.ErrNoRows
+}
+
+func (m *mockStorage) InvalidateEdge(ctx context.Context, id string) error {
+	return nil
 }
 
 func (m *mockStorage) DeleteEdge(ctx context.Context, id string) error {

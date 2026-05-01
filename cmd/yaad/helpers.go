@@ -7,15 +7,31 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/GrayCodeAI/yaad/internal/config"
 	"github.com/GrayCodeAI/yaad/internal/engine"
 	"github.com/GrayCodeAI/yaad/internal/graph"
 	"github.com/GrayCodeAI/yaad/internal/storage"
 )
 
+// projectDir returns the current working directory.
+func projectDir() string {
+	dir, _ := os.Getwd()
+	return dir
+}
+
 // dbPath returns the path to the project's yaad database.
 func dbPath() string {
-	dir, _ := os.Getwd()
-	return filepath.Join(dir, ".yaad", "yaad.db")
+	return filepath.Join(projectDir(), ".yaad", "yaad.db")
+}
+
+// loadConfig loads config from .yaad/config.toml (falls back to defaults).
+func loadConfig() *config.Config {
+	cfg, err := config.Load(projectDir())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "yaad: warning: config load failed, using defaults: %v\n", err)
+		return config.Default()
+	}
+	return cfg
 }
 
 // openEngine opens the yaad database and returns an engine.
@@ -32,7 +48,14 @@ func openEngine() *engine.Engine {
 		fmt.Fprintf(os.Stderr, "error opening database: %v\n", err)
 		os.Exit(1)
 	}
-	return engine.New(store, graph.New(store, store.DB()))
+	cfg := loadConfig()
+	eng := engine.New(store, graph.New(store, store.DB()))
+	eng.DecayConfig = engine.DecayConfig{
+		HalfLifeDays:  float64(cfg.Decay.HalfLifeDays),
+		MinConfidence: cfg.Decay.MinConfidence,
+		BoostOnAccess: cfg.Decay.BoostOnAccess,
+	}
+	return eng
 }
 
 // printJSON prints a value as indented JSON to stdout.

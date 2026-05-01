@@ -21,7 +21,6 @@ type Config struct {
 
 type ServerConfig struct {
 	Port     int    `toml:"port"`
-	GRPCPort int    `toml:"grpc_port"`
 	Host     string `toml:"host"`
 	TLS      bool   `toml:"tls"`
 	CertFile string `toml:"cert_file"`
@@ -69,7 +68,7 @@ type LLMConfig struct {
 
 func Default() *Config {
 	return &Config{
-		Server:     ServerConfig{Port: 3456, GRPCPort: 3457, Host: "127.0.0.1"},
+		Server:     ServerConfig{Port: 3456, Host: "127.0.0.1"},
 		Memory:     MemoryConfig{HotTokenBudget: 800, WarmTokenBudget: 800, MaxMemories: 10000},
 		Search:     SearchConfig{BM25Weight: 0.5, VectorWeight: 0.5, DefaultLimit: 10},
 		Embeddings: EmbeddingsConfig{Provider: "local", Model: "all-MiniLM-L6-v2"},

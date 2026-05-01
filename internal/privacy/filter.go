@@ -13,6 +13,9 @@ var patterns = []*regexp.Regexp{
 	regexp.MustCompile(`gh[pousr]_[A-Za-z0-9_]{36,}`),             // GitHub tokens
 	regexp.MustCompile(`glpat-[a-zA-Z0-9_\-]{20,}`),               // GitLab PAT
 	regexp.MustCompile(`SG\.[a-zA-Z0-9_\-]{20,}\.[a-zA-Z0-9_\-]{20,}`), // SendGrid API key
+	regexp.MustCompile(`xox[bpras]-[A-Za-z0-9\-]{10,}`),          // Slack tokens
+	regexp.MustCompile(`sk_live_[A-Za-z0-9]{20,}`),                // Stripe secret key
+	regexp.MustCompile(`npm_[A-Za-z0-9]{36,}`),                    // npm token
 	// JWT / tokens
 	regexp.MustCompile(`eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*`),
 	// Auth headers
@@ -29,6 +32,14 @@ var patterns = []*regexp.Regexp{
 func Filter(content string) string {
 	for _, p := range patterns {
 		content = p.ReplaceAllString(content, "[REDACTED]")
+	}
+	// Catch high-entropy tokens that regexes might miss.
+	// Only target tokens that look like standalone secrets (no JSON, no code).
+	for _, word := range strings.Fields(content) {
+		clean := strings.Trim(word, `"',:;{}[]()`)
+		if len(clean) >= 24 && !strings.ContainsAny(clean, "{}[]():/ ") && hasHighEntropy(clean, 4.5) && IsLikelySecret(clean) {
+			content = strings.Replace(content, clean, "[REDACTED]", 1)
+		}
 	}
 	return content
 }

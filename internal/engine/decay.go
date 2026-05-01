@@ -90,8 +90,11 @@ func GarbageCollect(ctx context.Context, store storage.Storage, cfg DecayConfig)
 	}
 	removed := 0
 	for _, n := range nodes {
+		if err := ctx.Err(); err != nil {
+			return removed, err
+		}
 		if n.Type == "file" || n.Type == "entity" {
-			continue // keep anchors
+			continue
 		}
 		if n.Confidence < cfg.MinConfidence {
 			if err := store.DeleteNode(ctx, n.ID); err == nil {

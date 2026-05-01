@@ -63,26 +63,36 @@ type Metrics struct {
 
 // Engine is the core memory engine wrapping graph + storage.
 type Engine struct {
-	store     storage.Storage
-	graph     graph.Graph
-	dedup     *dedup.Window
-	temporal  *temporal.Backbone
-	conflict  *conflict.Resolver
-	access    *AccessTracker
-	metrics   Metrics
-	mu        sync.Mutex // serializes writes (Remember, Forget, Feedback, etc.)
+	store       storage.Storage
+	graph       graph.Graph
+	dedup       *dedup.Window
+	temporal    *temporal.Backbone
+	conflict    *conflict.Resolver
+	access      *AccessTracker
+	summarizer  compact.Summarizer
+	metrics     Metrics
+	DecayConfig DecayConfig
+	mu          sync.Mutex // serializes writes (Remember, Forget, Feedback, etc.)
 }
 
 // New creates a memory engine.
 func New(store storage.Storage, g graph.Graph) *Engine {
 	return &Engine{
-		store:    store,
-		graph:    g,
-		dedup:    dedup.New(5 * time.Minute),
-		temporal: temporal.New(store),
-		conflict: conflict.New(store),
-		access:   NewAccessTracker(store, 30*time.Second),
+		store:       store,
+		graph:       g,
+		dedup:       dedup.New(5 * time.Minute),
+		temporal:    temporal.New(store),
+		conflict:    conflict.New(store),
+		access:      NewAccessTracker(store, 30*time.Second),
+		summarizer:  compact.DefaultSummarizer{},
+		DecayConfig: DefaultDecayConfig,
 	}
+}
+
+// WithSummarizer sets a custom summarizer for compaction (e.g., LLM-backed).
+func (e *Engine) WithSummarizer(s compact.Summarizer) *Engine {
+	e.summarizer = s
+	return e
 }
 
 // Close shuts down the engine and its background workers.
@@ -108,6 +118,8 @@ type RememberInput struct {
 	Project string
 	Tier    int
 	Tags    string
+	Key     string // optional unique key per project (upsert: same key → update, not duplicate)
+	Pinned  bool   // pinned nodes always appear in context output
 	Session string
 	Agent   string
 	// Optional: explicit edges to create
@@ -163,7 +175,32 @@ func (e *Engine) Remember(ctx context.Context, in RememberInput) (*storage.Node,
 	// 3. Content hash for exact dedup
 	hash := contentHash(content, in.Scope, in.Project)
 
-	// 4. Rolling window dedup (skip near-duplicates within 5min)
+	// 4. Keyed upsert: if key is set, find existing node and update it
+	if in.Key != "" {
+		existing, _ := e.store.GetNodeByKey(ctx, in.Key, in.Project)
+		if existing != nil {
+			// Save version before overwriting
+			_ = e.store.SaveVersion(ctx, existing.ID, existing.Content, in.Agent, "keyed update")
+			existing.Content = content
+			existing.ContentHash = hash
+			existing.Summary = summary
+			existing.Type = in.Type
+			existing.Tags = in.Tags
+			existing.Pinned = in.Pinned
+			existing.Confidence = 1.0
+			existing.AccessCount++
+			existing.AccessedAt = time.Now()
+			existing.UpdatedAt = time.Now()
+			existing.Version++
+			if err := e.store.UpdateNode(ctx, existing); err != nil {
+				return nil, fmt.Errorf("keyed upsert failed: %w", err)
+			}
+			atomic.AddInt64(&e.metrics.NodesStored, 1)
+			return existing, nil
+		}
+	}
+
+	// 5. Rolling window dedup (skip near-duplicates within 5min)
 	if e.dedup.IsDuplicate(content) {
 		existing, _ := e.store.SearchNodeByHash(ctx, hash, in.Scope, in.Project)
 		if existing != nil {
@@ -171,7 +208,7 @@ func (e *Engine) Remember(ctx context.Context, in RememberInput) (*storage.Node,
 		}
 	}
 
-	// 5. Check dedup — if exists, boost confidence and return
+	// 6. Check dedup — if exists, boost confidence and return
 	existing, _ := e.store.SearchNodeByHash(ctx, hash, in.Scope, in.Project)
 	if existing != nil {
 		existing.Confidence = min(existing.Confidence+0.2, 1.0)
@@ -183,7 +220,7 @@ func (e *Engine) Remember(ctx context.Context, in RememberInput) (*storage.Node,
 		return existing, nil
 	}
 
-	// 5. Create node
+	// 8. Create node
 	node := &storage.Node{
 		ID:            uuid.New().String(),
 		Type:          in.Type,
@@ -194,6 +231,8 @@ func (e *Engine) Remember(ctx context.Context, in RememberInput) (*storage.Node,
 		Project:       in.Project,
 		Tier:          in.Tier,
 		Tags:          in.Tags,
+		Key:           in.Key,
+		Pinned:        in.Pinned,
 		Confidence:    1.0,
 		SourceSession: in.Session,
 		SourceAgent:   in.Agent,
@@ -203,7 +242,7 @@ func (e *Engine) Remember(ctx context.Context, in RememberInput) (*storage.Node,
 		return nil, fmt.Errorf("create node failed: %w", err)
 	}
 
-	// 6. Extract entities and create anchor nodes + edges (best-effort)
+	// 9. Extract entities and create anchor nodes + edges (best-effort)
 	entities := ExtractEntities(content)
 	for _, ent := range entities {
 		entNode := e.getOrCreateAnchor(ctx, ent.Name, ent.Type, in.Scope, in.Project)
@@ -221,7 +260,7 @@ func (e *Engine) Remember(ctx context.Context, in RememberInput) (*storage.Node,
 		}
 	}
 
-	// 7. Create explicit edges (fail if user-requested edges can't be created)
+	// 10. Create explicit edges (fail if user-requested edges can't be created)
 	for _, ei := range in.Edges {
 		if err := e.graph.AddEdge(ctx, &storage.Edge{
 			ID:     uuid.New().String(),
@@ -234,13 +273,16 @@ func (e *Engine) Remember(ctx context.Context, in RememberInput) (*storage.Node,
 		}
 	}
 
-	// 8. Temporal backbone — auto-link to previous node in timeline
+	// 11. Temporal backbone — auto-link to previous node in timeline
 	if err := e.temporal.Link(ctx, node.ID, in.Project); err != nil {
 		return nil, fmt.Errorf("temporal link failed: %w", err)
 	}
 
-	// 9. Conflict resolution — detect and supersede contradictions (best-effort)
+	// 12. Conflict resolution — detect and supersede contradictions (best-effort)
 	_, _ = e.conflict.CheckAndResolve(ctx, node)
+
+	// 13. Self-linking — find related nodes and create edges (A-MEM inspired, best-effort)
+	e.SelfLink(ctx, node)
 
 	atomic.AddInt64(&e.metrics.NodesStored, 1)
 	return node, nil
@@ -251,6 +293,7 @@ type RecallOpts struct {
 	Query   string
 	Depth   int
 	Limit   int
+	Budget  int // max tokens in response (0 = no cap)
 	Type    string
 	Tier    int
 	Project string
@@ -328,6 +371,11 @@ func (e *Engine) Recall(ctx context.Context, opts RecallOpts) (*RecallResult, er
 		nodes = nodes[:opts.Limit]
 	}
 
+	// Enforce token budget if specified
+	if opts.Budget > 0 {
+		nodes = TrimToTokenBudget(nodes, opts.Budget)
+	}
+
 	// Dedup edges
 	edgeMap := map[string]*storage.Edge{}
 	for _, edge := range allEdges {
@@ -342,10 +390,26 @@ func (e *Engine) Recall(ctx context.Context, opts RecallOpts) (*RecallResult, er
 }
 
 // Context returns the hot-tier subgraph for session start injection.
+// Pinned nodes always appear first (guaranteed 500-token budget), followed by
+// hot-tier and active tasks filling the remaining budget.
 func (e *Engine) Context(ctx context.Context, project string) (*RecallResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+
+	const totalBudget = 4000  // tokens
+	const pinnedBudget = 500  // reserved for pinned
+
+	// Load pinned nodes (always-in-context, like Letta's core memory)
+	pinTrue := true
+	pinnedNodes, err := e.store.ListNodes(ctx, storage.NodeFilter{
+		Project: project, Pinned: &pinTrue,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("load pinned: %w", err)
+	}
+	pinnedNodes = TrimToTokenBudget(pinnedNodes, pinnedBudget)
+
 	// Load hot tier nodes
 	hotNodes, err := e.store.ListNodes(ctx, storage.NodeFilter{
 		Tier: 1, Project: project, MinConfidence: 0.3,
@@ -362,22 +426,47 @@ func (e *Engine) Context(ctx context.Context, project string) (*RecallResult, er
 		return nil, fmt.Errorf("load tasks: %w", err)
 	}
 
-	// Merge, dedup
+	// Merge hot+tasks, excluding already-pinned nodes
+	pinnedSet := map[string]bool{}
+	for _, n := range pinnedNodes {
+		pinnedSet[n.ID] = true
+	}
 	nodeMap := map[string]*storage.Node{}
 	for _, n := range hotNodes {
-		nodeMap[n.ID] = n
+		if !pinnedSet[n.ID] {
+			nodeMap[n.ID] = n
+		}
 	}
 	for _, n := range tasks {
-		nodeMap[n.ID] = n
+		if !pinnedSet[n.ID] {
+			nodeMap[n.ID] = n
+		}
 	}
 
-	nodes := make([]*storage.Node, 0, len(nodeMap))
+	rest := make([]*storage.Node, 0, len(nodeMap))
 	for _, n := range nodeMap {
-		nodes = append(nodes, n)
+		rest = append(rest, n)
 	}
-	sortByScore(nodes)
+	sortByScore(rest)
+
+	// Trim rest to remaining budget
+	remainingBudget := totalBudget - tokenCount(pinnedNodes)
+	rest = TrimToTokenBudget(rest, remainingBudget)
+
+	// Pinned first, then rest
+	nodes := make([]*storage.Node, 0, len(pinnedNodes)+len(rest))
+	nodes = append(nodes, pinnedNodes...)
+	nodes = append(nodes, rest...)
 
 	return &RecallResult{Nodes: nodes}, nil
+}
+
+func tokenCount(nodes []*storage.Node) int {
+	total := 0
+	for _, n := range nodes {
+		total += (len(n.Content) + len(n.Summary) + len(n.Tags) + 50) / 4
+	}
+	return total
 }
 
 // Forget archives a node by setting confidence to 0.
@@ -411,7 +500,7 @@ func (e *Engine) Compact(ctx context.Context, project string) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	c := compact.New(e.store, 50000)
+	c := compact.New(e.store, 50000).WithSummarizer(e.summarizer)
 	return c.Compact(ctx, project)
 }
 
@@ -527,18 +616,35 @@ func sortByScore(nodes []*storage.Node) {
 }
 
 func score(n *storage.Node, now time.Time) float64 {
+	// Recency: exponential decay based on last access or update
 	recency := 1.0
-	if !n.AccessedAt.IsZero() {
-		days := now.Sub(n.AccessedAt).Hours() / 24
+	ref := n.AccessedAt
+	if ref.IsZero() {
+		ref = n.UpdatedAt
+	}
+	if !ref.IsZero() {
+		days := now.Sub(ref).Hours() / 24
 		if days > 0 {
 			recency = 1.0 / (1.0 + days/30.0)
 		}
 	}
+
+	// Tier boost
 	tierBoost := 1.0
-	if n.Tier == 1 {
+	switch n.Tier {
+	case 1:
 		tierBoost = 2.0
+	case 2:
+		tierBoost = 1.3
 	}
-	return n.Confidence * recency * tierBoost * (1.0 + float64(n.AccessCount)*0.1)
+
+	// Pinned nodes get a fixed high boost
+	pinnedBoost := 1.0
+	if n.Pinned {
+		pinnedBoost = 3.0
+	}
+
+	return n.Confidence * recency * tierBoost * pinnedBoost * (1.0 + float64(n.AccessCount)*0.05)
 }
 
 

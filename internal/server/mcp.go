@@ -9,13 +9,13 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
-	"github.com/GrayCodeAI/yaad/internal/engine"
-	gitwatch "github.com/GrayCodeAI/yaad/internal/git"
-	"github.com/GrayCodeAI/yaad/internal/graph"
-	intentpkg "github.com/GrayCodeAI/yaad/internal/intent"
-	"github.com/GrayCodeAI/yaad/internal/skill"
-	"github.com/GrayCodeAI/yaad/internal/storage"
-	"github.com/GrayCodeAI/yaad/internal/utils"
+	"github.com/GrayCodeAI/yaad/engine"
+	gitwatch "github.com/GrayCodeAI/yaad/git"
+	"github.com/GrayCodeAI/yaad/graph"
+	intentpkg "github.com/GrayCodeAI/yaad/intent"
+	"github.com/GrayCodeAI/yaad/skill"
+	"github.com/GrayCodeAI/yaad/storage"
+	"github.com/GrayCodeAI/yaad/utils"
 )
 
 // MCPServer wraps the MCP protocol server for Hawk integration.

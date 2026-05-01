@@ -14,13 +14,13 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/GrayCodeAI/yaad/internal/bench"
-	"github.com/GrayCodeAI/yaad/internal/embeddings"
-	"github.com/GrayCodeAI/yaad/internal/engine"
-	"github.com/GrayCodeAI/yaad/internal/exportimport"
-	gitwatch "github.com/GrayCodeAI/yaad/internal/git"
-	"github.com/GrayCodeAI/yaad/internal/graph"
-	"github.com/GrayCodeAI/yaad/internal/skill"
-	"github.com/GrayCodeAI/yaad/internal/storage"
+	"github.com/GrayCodeAI/yaad/embeddings"
+	"github.com/GrayCodeAI/yaad/engine"
+	"github.com/GrayCodeAI/yaad/exportimport"
+	gitwatch "github.com/GrayCodeAI/yaad/git"
+	"github.com/GrayCodeAI/yaad/graph"
+	"github.com/GrayCodeAI/yaad/skill"
+	"github.com/GrayCodeAI/yaad/storage"
 	"github.com/GrayCodeAI/yaad/internal/version"
 )
 

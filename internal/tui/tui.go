@@ -10,10 +10,10 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/GrayCodeAI/yaad/internal/engine"
-	"github.com/GrayCodeAI/yaad/internal/utils"
-	intentpkg "github.com/GrayCodeAI/yaad/internal/intent"
-	"github.com/GrayCodeAI/yaad/internal/storage"
+	"github.com/GrayCodeAI/yaad/engine"
+	"github.com/GrayCodeAI/yaad/utils"
+	intentpkg "github.com/GrayCodeAI/yaad/intent"
+	"github.com/GrayCodeAI/yaad/storage"
 )
 
 // Screen constants

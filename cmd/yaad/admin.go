@@ -9,9 +9,9 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/GrayCodeAI/yaad/internal/bench"
-	"github.com/GrayCodeAI/yaad/internal/engine"
-	"github.com/GrayCodeAI/yaad/internal/exportimport"
-	"github.com/GrayCodeAI/yaad/internal/storage"
+	"github.com/GrayCodeAI/yaad/engine"
+	"github.com/GrayCodeAI/yaad/exportimport"
+	"github.com/GrayCodeAI/yaad/storage"
 )
 
 var decayCmd = &cobra.Command{

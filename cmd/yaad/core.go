@@ -8,10 +8,10 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/GrayCodeAI/yaad/internal/engine"
-	"github.com/GrayCodeAI/yaad/internal/graph"
-	"github.com/GrayCodeAI/yaad/internal/storage"
-	"github.com/GrayCodeAI/yaad/internal/utils"
+	"github.com/GrayCodeAI/yaad/engine"
+	"github.com/GrayCodeAI/yaad/graph"
+	"github.com/GrayCodeAI/yaad/storage"
+	"github.com/GrayCodeAI/yaad/utils"
 	"github.com/GrayCodeAI/yaad/internal/version"
 )
 

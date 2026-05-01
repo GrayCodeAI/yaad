@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/GrayCodeAI/yaad/internal/engine"
-	"github.com/GrayCodeAI/yaad/internal/storage"
+	"github.com/GrayCodeAI/yaad/engine"
+	"github.com/GrayCodeAI/yaad/storage"
 )
 
 // QA is a single question-answer pair for evaluation.

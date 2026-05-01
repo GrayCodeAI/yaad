@@ -10,11 +10,11 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/GrayCodeAI/yaad/internal/daemon"
-	"github.com/GrayCodeAI/yaad/internal/embeddings"
-	"github.com/GrayCodeAI/yaad/internal/engine"
+	"github.com/GrayCodeAI/yaad/embeddings"
+	"github.com/GrayCodeAI/yaad/engine"
 	"github.com/GrayCodeAI/yaad/internal/server"
-	"github.com/GrayCodeAI/yaad/internal/storage"
-	"github.com/GrayCodeAI/yaad/internal/utils"
+	"github.com/GrayCodeAI/yaad/storage"
+	"github.com/GrayCodeAI/yaad/utils"
 	"github.com/GrayCodeAI/yaad/internal/version"
 )
 

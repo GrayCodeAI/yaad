@@ -6,10 +6,10 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/GrayCodeAI/yaad/internal/hooks"
-	"github.com/GrayCodeAI/yaad/internal/skill"
-	"github.com/GrayCodeAI/yaad/internal/utils"
-	intentpkg "github.com/GrayCodeAI/yaad/internal/intent"
+	"github.com/GrayCodeAI/yaad/hooks"
+	"github.com/GrayCodeAI/yaad/skill"
+	"github.com/GrayCodeAI/yaad/utils"
+	intentpkg "github.com/GrayCodeAI/yaad/intent"
 )
 
 var hookCmd = &cobra.Command{

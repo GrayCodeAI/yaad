@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/GrayCodeAI/yaad/internal/engine"
-	"github.com/GrayCodeAI/yaad/internal/graph"
-	"github.com/GrayCodeAI/yaad/internal/storage"
+	"github.com/GrayCodeAI/yaad/engine"
+	"github.com/GrayCodeAI/yaad/graph"
+	"github.com/GrayCodeAI/yaad/storage"
 )
 
 func setupTestServer(t *testing.T) (*RESTServer, *engine.Engine, func()) {

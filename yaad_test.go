@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/GrayCodeAI/yaad/internal/config"
-	"github.com/GrayCodeAI/yaad/internal/engine"
-	"github.com/GrayCodeAI/yaad/internal/graph"
-	"github.com/GrayCodeAI/yaad/internal/hooks"
-	"github.com/GrayCodeAI/yaad/internal/skill"
-	"github.com/GrayCodeAI/yaad/internal/storage"
+	"github.com/GrayCodeAI/yaad/config"
+	"github.com/GrayCodeAI/yaad/engine"
+	"github.com/GrayCodeAI/yaad/graph"
+	"github.com/GrayCodeAI/yaad/hooks"
+	"github.com/GrayCodeAI/yaad/skill"
+	"github.com/GrayCodeAI/yaad/storage"
 )
 
 // --- Full Hawk Session Lifecycle ---

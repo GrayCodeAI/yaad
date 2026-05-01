@@ -108,7 +108,7 @@ var doctorCmd = &cobra.Command{
 				break
 			}
 		}
-		check("agent MCP config found", hasMCP, "run: yaad setup <agent>  (e.g. yaad setup hawk)")
+		check("agent MCP config found", hasMCP, "run: yaad setup <agent>")
 
 		_, err = os.Stat(filepath.Join(dir, ".git"))
 		check("git repository (for staleness detection)", err == nil, "run: git init")

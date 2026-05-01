@@ -16,8 +16,8 @@ func main() {
 
 var rootCmd = &cobra.Command{
 	Use:   "yaad",
-	Short: "Memory for coding agents",
-	Long:  "Yaad (याद) — model-agnostic, graph-native memory for coding agents",
+	Short: "Graph-native memory system",
+	Long:  "Yaad (याद) — model-agnostic, graph-native memory system",
 	Run: func(cmd *cobra.Command, args []string) {
 		// Default: start REST server
 		serveCmd.Run(cmd, args)

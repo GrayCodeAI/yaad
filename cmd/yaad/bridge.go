@@ -18,7 +18,7 @@ import (
 
 var hookCmd = &cobra.Command{
 	Use:   "hook [event]",
-	Short: "Auto-capture hook (called by coding agents)",
+	Short: "Auto-capture hook for lifecycle events",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		eng := openEngine()

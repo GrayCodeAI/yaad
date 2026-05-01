@@ -273,7 +273,7 @@ func TestPhase4HooksAndReplay(t *testing.T) {
 	runner := hooks.New(eng, dir)
 
 	// SessionStart
-	in := &hooks.HookInput{Agent: "claude-code", Project: dir}
+	in := &hooks.HookInput{Agent: "test-agent", Project: dir}
 	if err := runner.SessionStart(context.Background(), in); err != nil {
 		t.Fatalf("SessionStart: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestPhase4HooksAndReplay(t *testing.T) {
 		ToolName:   "Write",
 		ToolInput:  "src/auth.ts",
 		ToolOutput: "wrote JWT middleware",
-		Agent:      "claude-code",
+		Agent:      "test-agent",
 	}
 	if err := runner.PostToolUse(context.Background(), toolIn); err != nil {
 		t.Fatalf("PostToolUse: %v", err)
@@ -303,7 +303,7 @@ func TestPhase4HooksAndReplay(t *testing.T) {
 	}
 
 	// SessionEnd
-	endIn := &hooks.HookInput{Summary: "Implemented JWT auth middleware", Agent: "claude-code"}
+	endIn := &hooks.HookInput{Summary: "Implemented JWT auth middleware", Agent: "test-agent"}
 	if err := runner.SessionEnd(context.Background(), endIn); err != nil {
 		t.Fatalf("SessionEnd: %v", err)
 	}

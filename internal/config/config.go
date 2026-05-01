@@ -59,8 +59,7 @@ type GitConfig struct {
 }
 
 // LLMConfig is optional. Yaad is a memory layer — it does NOT call LLMs directly.
-// The coding agent (Hawk, Claude Code, Cursor, etc.) handles all LLM calls.
-// This config is reserved for future agent-triggered summarization hooks.
+// This config is reserved for future summarization hooks.
 type LLMConfig struct {
 	Enabled   bool   `toml:"enabled"`
 	Provider  string `toml:"provider"`

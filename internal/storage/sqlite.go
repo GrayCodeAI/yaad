@@ -32,7 +32,7 @@ type Edge struct {
 	CreatedAt                        time.Time
 }
 
-// Session tracks a coding agent session.
+// Session tracks a session.
 type Session struct {
 	ID, Project, Summary, Agent string
 	StartedAt, EndedAt          time.Time

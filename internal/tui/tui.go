@@ -244,7 +244,7 @@ func (m Model) viewDashboard() string {
 	var sb strings.Builder
 
 	// Header
-	sb.WriteString(titleStyle.Render("याद Yaad") + "  " + dimStyle.Render("Memory for Coding Agents") + "\n\n")
+	sb.WriteString(titleStyle.Render("याद Yaad") + "  " + dimStyle.Render("Graph-Native Memory System") + "\n\n")
 
 	// Stats
 	if m.stats != nil {

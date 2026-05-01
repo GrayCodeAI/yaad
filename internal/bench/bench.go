@@ -102,7 +102,7 @@ func findRank(nodes []*storage.Node, qa QA) int {
 	return 0
 }
 
-// DefaultQAs returns a built-in set of coding-agent memory QA pairs.
+// DefaultQAs returns a built-in set of memory QA pairs.
 // Covers the same categories as LongMemEval: single-hop, multi-hop, temporal, preference.
 func DefaultQAs() []QA {
 	return []QA{

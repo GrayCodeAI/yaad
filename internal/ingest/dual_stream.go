@@ -2,7 +2,6 @@
 // Based on MAGMA (arxiv:2601.03236) and GAM (arxiv:2604.12285).
 //
 // Yaad is a memory layer — it does NOT call LLM APIs directly.
-// The coding agent (Hawk, Claude Code, Cursor, etc.) handles the LLM.
 // Yaad stores, retrieves, and organizes memories.
 //
 // Fast path (sync): non-blocking — store node + temporal edge, return immediately.
@@ -111,7 +110,6 @@ func (ds *DualStream) startWorker() {
 
 // slowPath performs heuristic causal inference in the background.
 // No LLM calls — Yaad is a memory layer, not an LLM client.
-// The coding agent handles LLM; Yaad handles memory structure.
 func (ds *DualStream) slowPath(job SlowPathJob) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()

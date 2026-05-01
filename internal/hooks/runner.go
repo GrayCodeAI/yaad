@@ -1,5 +1,5 @@
-// Package hooks implements auto-capture hooks for coding agents.
-// Hooks are invoked by the agent at key lifecycle events and automatically
+// Package hooks implements auto-capture hooks for lifecycle events.
+// Hooks are invoked at key lifecycle events and automatically
 // capture observations into the Yaad memory graph.
 package hooks
 
@@ -79,7 +79,7 @@ func (r *Runner) SessionStart(ctx context.Context, in *HookInput) error {
 		fmt.Fprintf(os.Stderr, "yaad: warning: could not write session file: %v\n", err)
 	}
 
-	// Get context and print to stdout (Claude Code injects stdout into session)
+	// Get context and print to stdout for injection into the session
 	result, err := r.eng.Context(ctx, r.project)
 	if err != nil {
 		return err

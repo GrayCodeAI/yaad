@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -111,17 +112,18 @@ func (e *Engine) Store() storage.Storage { return e.store }
 
 // RememberInput is the input for creating a memory node.
 type RememberInput struct {
-	Type    string // convention|decision|bug|spec|task|preference
-	Content string
-	Summary string
-	Scope   string // global|project
-	Project string
-	Tier    int
-	Tags    string
-	Key     string // optional unique key per project (upsert: same key → update, not duplicate)
-	Pinned  bool   // pinned nodes always appear in context output
-	Session string
-	Agent   string
+	Type     string // convention|decision|bug|spec|task|preference
+	Content  string
+	Summary  string // doubles as short searchable title (Engram Title)
+	Scope    string // global|project
+	Project  string
+	Tier     int
+	Tags     string
+	Key      string // optional unique key per project (upsert: same key → update, not duplicate)
+	TopicKey string // topic-based upsert dedup key (Engram pattern); stored in Tags as "topic:<key>"
+	Pinned   bool   // pinned nodes always appear in context output
+	Session  string
+	Agent    string
 	// Optional: explicit edges to create
 	Edges []EdgeInput
 }
@@ -160,9 +162,9 @@ func (e *Engine) Remember(ctx context.Context, in RememberInput) (*storage.Node,
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// 1. Privacy filter
-	content := privacy.Filter(in.Content)
-	summary := privacy.Filter(in.Summary)
+	// 1. Privacy filter + strip <private> tags
+	content := stripPrivateTags(privacy.Filter(in.Content))
+	summary := stripPrivateTags(privacy.Filter(in.Summary))
 
 	// 2. Defaults
 	if in.Scope == "" {
@@ -197,6 +199,39 @@ func (e *Engine) Remember(ctx context.Context, in RememberInput) (*storage.Node,
 			}
 			atomic.AddInt64(&e.metrics.NodesStored, 1)
 			return existing, nil
+		}
+	}
+
+	// 4b. TopicKey upsert: dedup by topic tag (Engram pattern)
+	if in.TopicKey != "" {
+		tag := "topic:" + in.TopicKey
+		candidates, _ := e.store.ListNodes(ctx, storage.NodeFilter{
+			Type: in.Type, Project: in.Project, Scope: in.Scope,
+		})
+		for _, c := range candidates {
+			if containsTag(c.Tags, tag) {
+				_ = e.store.SaveVersion(ctx, c.ID, c.Content, in.Agent, "topic upsert: "+in.TopicKey)
+				c.Content = content
+				c.ContentHash = hash
+				c.Summary = summary
+				c.Tags = in.Tags
+				c.Pinned = in.Pinned
+				c.Confidence = 1.0
+				c.AccessCount++
+				c.UpdatedAt = time.Now()
+				c.Version++
+				if err := e.store.UpdateNode(ctx, c); err != nil {
+					return nil, fmt.Errorf("topic upsert failed: %w", err)
+				}
+				atomic.AddInt64(&e.metrics.NodesStored, 1)
+				return c, nil
+			}
+		}
+		// Append topic tag for new node
+		if in.Tags == "" {
+			in.Tags = tag
+		} else {
+			in.Tags = in.Tags + "," + tag
 		}
 	}
 
@@ -340,20 +375,30 @@ func (e *Engine) Recall(ctx context.Context, opts RecallOpts) (*RecallResult, er
 	var allEdges []*storage.Edge
 	for _, seed := range seeds {
 		nodeMap[seed.ID] = seed
-		// Use IntentBFS for intent-aware traversal
+	}
+	// Collect all expanded IDs first, then batch-fetch
+	var expandIDs []string
+	for _, seed := range seeds {
 		ids, err := e.graph.IntentBFS(ctx, seed.ID, opts.Depth, queryIntent)
 		if err != nil {
 			continue
 		}
 		for _, id := range ids {
-			if n, err := e.store.GetNode(ctx, id); err == nil {
-				nodeMap[n.ID] = n
+			if _, ok := nodeMap[id]; !ok {
+				expandIDs = append(expandIDs, id)
 			}
 		}
-		// Also get edges for the subgraph
 		sg, err := e.graph.ExtractSubgraph(ctx, seed.ID, opts.Depth)
 		if err == nil {
 			allEdges = append(allEdges, sg.Edges...)
+		}
+	}
+	if len(expandIDs) > 0 {
+		expanded, err := e.store.GetNodesBatch(ctx, expandIDs)
+		if err == nil {
+			for _, n := range expanded {
+				nodeMap[n.ID] = n
+			}
 		}
 	}
 
@@ -647,5 +692,102 @@ func score(n *storage.Node, now time.Time) float64 {
 	return n.Confidence * recency * tierBoost * pinnedBoost * (1.0 + float64(n.AccessCount)*0.05)
 }
 
+// stripPrivateTags removes <private>...</private> tags and their content.
+func stripPrivateTags(s string) string {
+	for {
+		start := strings.Index(s, "<private>")
+		if start == -1 {
+			return s
+		}
+		end := strings.Index(s[start:], "</private>")
+		if end == -1 {
+			return s
+		}
+		s = s[:start] + s[start+end+len("</private>"):]
+	}
+}
 
+// containsTag checks if a comma-separated tag list contains a specific tag.
+func containsTag(tags, tag string) bool {
+	for _, t := range strings.Split(tags, ",") {
+		if strings.TrimSpace(t) == tag {
+			return true
+		}
+	}
+	return false
+}
 
+// ConflictCandidate represents a potential conflicting node found via FTS.
+type ConflictCandidate struct {
+	NodeID  string
+	Content string
+	Score   float64
+}
+
+// FindConflictCandidates searches for existing nodes that may conflict with the given content.
+// Uses FTS search scoped to the same node type, returning candidates above a score threshold.
+func (e *Engine) FindConflictCandidates(ctx context.Context, nodeID, content string, limit int) ([]ConflictCandidate, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	// Use first 200 chars as search query to find similar nodes
+	query := content
+	if len(query) > 200 {
+		query = query[:200]
+	}
+	nodes, err := e.store.SearchNodes(ctx, query, limit*2)
+	if err != nil {
+		return nil, err
+	}
+	const minScore = 0.3
+	var candidates []ConflictCandidate
+	for _, n := range nodes {
+		if n.ID == nodeID {
+			continue
+		}
+		// Compute term overlap as a simple similarity score
+		s := termOverlap(content, n.Content)
+		if s >= minScore {
+			candidates = append(candidates, ConflictCandidate{
+				NodeID:  n.ID,
+				Content: n.Content,
+				Score:   s,
+			})
+		}
+		if len(candidates) >= limit {
+			break
+		}
+	}
+	return candidates, nil
+}
+
+// termOverlap computes Jaccard similarity of key terms between two strings.
+func termOverlap(a, b string) float64 {
+	termsA := keyTerms(a)
+	termsB := keyTerms(b)
+	if len(termsA) == 0 || len(termsB) == 0 {
+		return 0
+	}
+	shared := 0
+	for t := range termsA {
+		if termsB[t] {
+			shared++
+		}
+	}
+	union := len(termsA) + len(termsB) - shared
+	if union == 0 {
+		return 0
+	}
+	return float64(shared) / float64(union)
+}
+
+func keyTerms(s string) map[string]bool {
+	terms := map[string]bool{}
+	for _, w := range strings.Fields(strings.ToLower(s)) {
+		w = strings.Trim(w, ".,;:!?\"'()[]{}") 
+		if len(w) > 3 {
+			terms[w] = true
+		}
+	}
+	return terms
+}

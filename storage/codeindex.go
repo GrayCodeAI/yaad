@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"container/heap"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -284,8 +285,58 @@ func (s *Store) StoreVector(ctx context.Context, chunkID string, vec []float32) 
 	return err
 }
 
+// rankedChunk pairs a chunk with its FTS rank for heap-based merging.
+type rankedChunk struct {
+	chunk *CodeChunkRecord
+	rank  float64 // FTS5 rank (more negative = better match)
+}
+
+// chunkHeap is a min-heap by rank (most negative first = best match).
+type chunkHeap []rankedChunk
+
+func (h chunkHeap) Len() int            { return len(h) }
+func (h chunkHeap) Less(i, j int) bool   { return h[i].rank < h[j].rank }
+func (h chunkHeap) Swap(i, j int)        { h[i], h[j] = h[j], h[i] }
+func (h *chunkHeap) Push(x any)          { *h = append(*h, x.(rankedChunk)) }
+func (h *chunkHeap) Pop() any            { old := *h; n := len(old); v := old[n-1]; *h = old[:n-1]; return v }
+
+// searchOneLang runs an FTS query filtered to a single language, returning ranked results.
+func (s *Store) searchOneLang(ctx context.Context, ftsQuery, lang string, limit int) ([]rankedChunk, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT c.id, c.path, c.start_line, c.end_line, c.content, c.symbol, c.language, c.tokens, c.file_hash, c.schema_version, c.vector, rank
+		 FROM code_chunks_fts f
+		 JOIN code_chunks c ON f.rowid = c.rowid
+		 WHERE code_chunks_fts MATCH ? AND c.language = ?
+		 ORDER BY rank LIMIT ?`, ftsQuery, lang, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []rankedChunk
+	for rows.Next() {
+		c := &CodeChunkRecord{}
+		var sv sql.NullString
+		var vec []byte
+		var r float64
+		if err := rows.Scan(&c.ID, &c.Path, &c.StartLine, &c.EndLine,
+			&c.Content, &c.Symbol, &c.Language, &c.Tokens, &c.FileHash,
+			&sv, &vec, &r); err != nil {
+			return nil, err
+		}
+		if sv.Valid {
+			c.SchemaVersion = sv.String
+		}
+		c.Vector = vec
+		out = append(out, rankedChunk{chunk: c, rank: r})
+	}
+	return out, rows.Err()
+}
+
 // SearchCodeChunksByLanguage performs a full-text search filtered by language.
-// If languages is empty the search covers all languages (same as SearchCodeChunksFTS).
+// If languages is empty, calls existing SearchCodeChunksFTS.
+// If one language, adds a WHERE language = ? filter.
+// If multiple languages, runs separate queries per language and merges via min-heap.
 func (s *Store) SearchCodeChunksByLanguage(ctx context.Context, query string, languages []string, limit int) ([]*CodeChunkRecord, error) {
 	if err := s.ensureCodeChunksFTS(ctx); err != nil {
 		return nil, fmt.Errorf("ensure FTS: %w", err)
@@ -294,36 +345,42 @@ func (s *Store) SearchCodeChunksByLanguage(ctx context.Context, query string, la
 		limit = 10
 	}
 
-	ftsQuery := escapeCodeFTS5(query)
-
 	if len(languages) == 0 {
 		return s.SearchCodeChunksFTS(ctx, query, limit)
 	}
 
-	// Build WHERE language IN (?, ?, ...) clause
-	placeholders := make([]string, len(languages))
-	args := make([]any, 0, len(languages)+2)
-	args = append(args, ftsQuery)
-	for i, lang := range languages {
-		placeholders[i] = "?"
-		args = append(args, lang)
+	ftsQuery := escapeCodeFTS5(query)
+
+	if len(languages) == 1 {
+		ranked, err := s.searchOneLang(ctx, ftsQuery, languages[0], limit)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]*CodeChunkRecord, len(ranked))
+		for i, r := range ranked {
+			out[i] = r.chunk
+		}
+		return out, nil
 	}
-	args = append(args, limit)
 
-	q := `SELECT c.id, c.path, c.start_line, c.end_line, c.content, c.symbol, c.language, c.tokens, c.file_hash, c.schema_version, c.vector
-		 FROM code_chunks_fts f
-		 JOIN code_chunks c ON f.rowid = c.rowid
-		 WHERE code_chunks_fts MATCH ?
-		   AND c.language IN (` + strings.Join(placeholders, ",") + `)
-		 ORDER BY rank LIMIT ?`
-
-	rows, err := s.db.QueryContext(ctx, q, args...)
-	if err != nil {
-		return nil, err
+	// Multiple languages: query each, merge with min-heap
+	h := &chunkHeap{}
+	heap.Init(h)
+	for _, lang := range languages {
+		ranked, err := s.searchOneLang(ctx, ftsQuery, lang, limit)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range ranked {
+			heap.Push(h, r)
+		}
 	}
-	defer rows.Close()
 
-	return scanCodeChunks(rows)
+	var out []*CodeChunkRecord
+	for h.Len() > 0 && len(out) < limit {
+		out = append(out, heap.Pop(h).(rankedChunk).chunk)
+	}
+	return out, nil
 }
 
 // SearchCodeChunksHybrid performs a hybrid search combining FTS5 ranking with
@@ -470,4 +527,29 @@ func cosineSimFloat32(a, b []float32) float32 {
 		return 0
 	}
 	return float32(dot / (math.Sqrt(normA) * math.Sqrt(normB)))
+}
+
+// RefreshCodeIndex checks each path for staleness by comparing the current file
+// hash (via hashFn) against the stored hash. Returns the count of stale files.
+func (s *Store) RefreshCodeIndex(ctx context.Context, paths []string, hashFn func(string) string) (int, error) {
+	stale := 0
+	for _, p := range paths {
+		current := hashFn(p)
+		stored, err := s.GetFileHash(ctx, p)
+		if err != nil {
+			return stale, err
+		}
+		if stored != current {
+			stale++
+		}
+	}
+	return stale, nil
+}
+
+// ComputeSchemaFingerprint returns a hex-encoded 128-bit hash of the chunker
+// version and embedding model, suitable for invalidating all chunks when the
+// indexing pipeline changes. Uses SHA-256 truncated to 16 bytes.
+func ComputeSchemaFingerprint(chunkerVersion, embeddingModel string) string {
+	h := sha256.Sum256([]byte(chunkerVersion + "|" + embeddingModel))
+	return hex.EncodeToString(h[:16]) // 128-bit / 32 hex chars
 }

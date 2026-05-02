@@ -56,6 +56,14 @@ func (m *mockStorage) UpdateNode(ctx context.Context, n *Node) error {
 	return nil
 }
 
+func (m *mockStorage) UpdateNodeContent(ctx context.Context, id, newContent string) error {
+	if n, ok := m.nodes[id]; ok {
+		n.Content = newContent
+		return nil
+	}
+	return sql.ErrNoRows
+}
+
 func (m *mockStorage) DeleteNode(ctx context.Context, id string) error {
 	delete(m.nodes, id)
 	return nil

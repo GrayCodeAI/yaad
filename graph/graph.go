@@ -112,12 +112,12 @@ func (g *graphImpl) BFS(ctx context.Context, startID string, maxDepth int) ([]st
 			SELECT e.to_id, sg.depth + 1
 			FROM sg
 			JOIN edges e ON e.from_id = sg.id
-			WHERE sg.depth < ? AND e.acyclic = 1
+			WHERE sg.depth < ? AND e.acyclic = 1 AND e.invalid_at IS NULL
 			UNION
 			SELECT CASE WHEN e.from_id = sg.id THEN e.to_id ELSE e.from_id END, sg.depth + 1
 			FROM sg
 			JOIN edges e ON (e.from_id = sg.id OR e.to_id = sg.id)
-			WHERE sg.depth < ? AND e.acyclic = 0
+			WHERE sg.depth < ? AND e.acyclic = 0 AND e.invalid_at IS NULL
 		)
 		SELECT DISTINCT id FROM sg`
 	rows, err := g.db.QueryContext(ctx, query, startID, maxDepth, maxDepth)
@@ -166,7 +166,7 @@ func (g *graphImpl) Ancestors(ctx context.Context, id string) ([]string, error) 
 			SELECT ?
 			UNION
 			SELECT e.from_id FROM anc a
-			JOIN edges e ON e.to_id = a.id AND e.acyclic = 1
+			JOIN edges e ON e.to_id = a.id AND e.acyclic = 1 AND e.invalid_at IS NULL
 		)
 		SELECT DISTINCT id FROM anc WHERE id != ?`
 	rows, err := g.db.QueryContext(ctx, query, id, id)
@@ -192,7 +192,7 @@ func (g *graphImpl) Descendants(ctx context.Context, id string) ([]string, error
 			SELECT ?
 			UNION
 			SELECT e.to_id FROM desc d
-			JOIN edges e ON e.from_id = d.id AND e.acyclic = 1
+			JOIN edges e ON e.from_id = d.id AND e.acyclic = 1 AND e.invalid_at IS NULL
 		)
 		SELECT DISTINCT id FROM desc WHERE id != ?`
 	rows, err := g.db.QueryContext(ctx, query, id, id)
@@ -297,7 +297,7 @@ func (g *graphImpl) Impact(ctx context.Context, filePath string, maxDepth int) (
 			SELECT e.from_id, a.depth + 1
 			FROM affected a
 			JOIN edges e ON e.to_id = a.id
-			WHERE a.depth < ?
+			WHERE a.depth < ? AND e.invalid_at IS NULL
 		)
 		SELECT DISTINCT id FROM affected`
 	rows, err := g.db.QueryContext(ctx, query, filePath, maxDepth)

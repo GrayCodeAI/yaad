@@ -106,6 +106,19 @@ func (m *mockStorage) UpdateNode(ctx context.Context, n *storage.Node) error {
 	return nil
 }
 
+func (m *mockStorage) UpdateNodeContent(ctx context.Context, id, newContent string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if n, ok := m.nodes[id]; ok {
+		n.Content = newContent
+		return nil
+	}
+	return sql.ErrNoRows
+}
+
 func (m *mockStorage) DeleteNode(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err

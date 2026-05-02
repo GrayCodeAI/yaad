@@ -15,9 +15,22 @@ import (
 
 var httpClient = &http.Client{Timeout: 30 * time.Second}
 
+// EmbedMode specifies whether a text is a document or a query for
+// asymmetric embedding models.
+type EmbedMode int
+
+const (
+	// ModeDocument indicates the text is a document to be stored.
+	ModeDocument EmbedMode = iota
+	// ModeQuery indicates the text is a search query.
+	ModeQuery
+)
+
 // Provider generates vector embeddings for text.
 type Provider interface {
 	Embed(ctx context.Context, text string) ([]float32, error)
+	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
+	EmbedWithMode(ctx context.Context, text string, mode EmbedMode) ([]float32, error)
 	Dims() int
 	Name() string
 }
@@ -82,6 +95,61 @@ func (p *openAI) Embed(ctx context.Context, text string) ([]float32, error) {
 	return result.Data[0].Embedding, nil
 }
 
+func (p *openAI) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return nil, nil
+	}
+	body, err := json.Marshal(map[string]any{
+		"input": texts,
+		"model": p.model,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("openai: marshal batch: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.openai.com/v1/embeddings", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("openai: create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Data []struct {
+			Embedding []float32 `json:"embedding"`
+			Index     int       `json:"index"`
+		} `json:"data"`
+		Error *struct{ Message string } `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	if result.Error != nil {
+		return nil, fmt.Errorf("openai: %s", result.Error.Message)
+	}
+	if len(result.Data) == 0 {
+		return nil, fmt.Errorf("openai: empty batch response")
+	}
+	// Results may come back out of order; sort by index
+	out := make([][]float32, len(texts))
+	for _, d := range result.Data {
+		if d.Index < len(out) {
+			out[d.Index] = d.Embedding
+		}
+	}
+	return out, nil
+}
+
+// EmbedWithMode for OpenAI ignores the mode (no asymmetric support).
+func (p *openAI) EmbedWithMode(ctx context.Context, text string, _ EmbedMode) ([]float32, error) {
+	return p.Embed(ctx, text)
+}
+
 // --- Voyage AI ---
 
 type voyage struct {
@@ -140,6 +208,94 @@ func (p *voyage) Embed(ctx context.Context, text string) ([]float32, error) {
 	return result.Data[0].Embedding, nil
 }
 
+func (p *voyage) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return nil, nil
+	}
+	body, err := json.Marshal(map[string]any{
+		"input": texts,
+		"model": p.model,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("voyage: marshal batch: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.voyageai.com/v1/embeddings", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("voyage: create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("voyage: API returned status %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Data []struct {
+			Embedding []float32 `json:"embedding"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	out := make([][]float32, len(result.Data))
+	for i, d := range result.Data {
+		out[i] = d.Embedding
+	}
+	return out, nil
+}
+
+// EmbedWithMode for Voyage uses input_type for asymmetric embeddings.
+func (p *voyage) EmbedWithMode(ctx context.Context, text string, mode EmbedMode) ([]float32, error) {
+	inputType := "search_document"
+	if mode == ModeQuery {
+		inputType = "search_query"
+	}
+	body, err := json.Marshal(map[string]any{
+		"input":      []string{text},
+		"model":      p.model,
+		"input_type": inputType,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("voyage: marshal: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.voyageai.com/v1/embeddings", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("voyage: create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("voyage: API returned status %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Data []struct {
+			Embedding []float32 `json:"embedding"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	if len(result.Data) == 0 {
+		return nil, fmt.Errorf("voyage: empty response")
+	}
+	return result.Data[0].Embedding, nil
+}
+
 // --- Local stub (hash-based pseudo-vectors, no API needed) ---
 
 type localStub struct{}
@@ -160,6 +316,23 @@ func (p *localStub) Embed(_ context.Context, text string) ([]float32, error) {
 		vec[i] = float32(int8(h[i%32])) / 128.0
 	}
 	return normalize(vec), nil
+}
+
+func (p *localStub) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	out := make([][]float32, len(texts))
+	for i, t := range texts {
+		vec, err := p.Embed(ctx, t)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = vec
+	}
+	return out, nil
+}
+
+// EmbedWithMode for localStub ignores the mode.
+func (p *localStub) EmbedWithMode(ctx context.Context, text string, _ EmbedMode) ([]float32, error) {
+	return p.Embed(ctx, text)
 }
 
 // --- Helpers ---

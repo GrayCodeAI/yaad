@@ -87,7 +87,12 @@ func (p *openAI) Embed(ctx context.Context, text string) ([]float32, error) {
 		return nil, err
 	}
 	if result.Error != nil {
-		return nil, fmt.Errorf("openai: %s", result.Error.Message)
+		errMsg := result.Error.Message
+		if d := ExtractRetryDelay(errMsg); d > 0 {
+			time.Sleep(d)
+			return p.Embed(ctx, text)
+		}
+		return nil, fmt.Errorf("openai: %s", errMsg)
 	}
 	if len(result.Data) == 0 {
 		return nil, fmt.Errorf("openai: empty response")
@@ -130,7 +135,12 @@ func (p *openAI) EmbedBatch(ctx context.Context, texts []string) ([][]float32, e
 		return nil, err
 	}
 	if result.Error != nil {
-		return nil, fmt.Errorf("openai: %s", result.Error.Message)
+		errMsg := result.Error.Message
+		if d := ExtractRetryDelay(errMsg); d > 0 {
+			time.Sleep(d)
+			return p.EmbedBatch(ctx, texts)
+		}
+		return nil, fmt.Errorf("openai: %s", errMsg)
 	}
 	if len(result.Data) == 0 {
 		return nil, fmt.Errorf("openai: empty batch response")
@@ -191,7 +201,16 @@ func (p *voyage) Embed(ctx context.Context, text string) ([]float32, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("voyage: API returned status %d", resp.StatusCode)
+		var errBody struct {
+			Detail string `json:"detail"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&errBody)
+		errMsg := fmt.Sprintf("voyage: API returned status %d: %s", resp.StatusCode, errBody.Detail)
+		if d := ExtractRetryDelay(errMsg); d > 0 {
+			time.Sleep(d)
+			return p.Embed(ctx, text)
+		}
+		return nil, fmt.Errorf("%s", errMsg)
 	}
 
 	var result struct {
@@ -233,7 +252,16 @@ func (p *voyage) EmbedBatch(ctx context.Context, texts []string) ([][]float32, e
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("voyage: API returned status %d", resp.StatusCode)
+		var errBody struct {
+			Detail string `json:"detail"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&errBody)
+		errMsg := fmt.Sprintf("voyage: API returned status %d: %s", resp.StatusCode, errBody.Detail)
+		if d := ExtractRetryDelay(errMsg); d > 0 {
+			time.Sleep(d)
+			return p.EmbedBatch(ctx, texts)
+		}
+		return nil, fmt.Errorf("%s", errMsg)
 	}
 
 	var result struct {
@@ -279,7 +307,16 @@ func (p *voyage) EmbedWithMode(ctx context.Context, text string, mode EmbedMode)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("voyage: API returned status %d", resp.StatusCode)
+		var errBody struct {
+			Detail string `json:"detail"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&errBody)
+		errMsg := fmt.Sprintf("voyage: API returned status %d: %s", resp.StatusCode, errBody.Detail)
+		if d := ExtractRetryDelay(errMsg); d > 0 {
+			time.Sleep(d)
+			return p.EmbedWithMode(ctx, text, mode)
+		}
+		return nil, fmt.Errorf("%s", errMsg)
 	}
 
 	var result struct {

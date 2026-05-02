@@ -244,7 +244,7 @@ func TestHybridSearch(t *testing.T) {
 
 	// Hybrid search: query biased toward auth
 	queryVec := []float32{0.0, 0.9, 0.1, 0.0}
-	results, err := s.SearchCodeChunksHybrid(ctx, "Authenticate token", queryVec, 10)
+	results, err := s.SearchCodeChunksHybrid(ctx, "Authenticate token", queryVec, 10, nil)
 	if err != nil {
 		t.Fatalf("SearchCodeChunksHybrid: %v", err)
 	}
@@ -262,6 +262,51 @@ func TestHybridSearch(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected Authenticate in hybrid search results")
+	}
+}
+
+func TestSearchCodeChunksByLanguage(t *testing.T) {
+	s, cleanup := setupStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	if err := s.CreateCodeIndex(ctx); err != nil {
+		t.Fatalf("CreateCodeIndex: %v", err)
+	}
+
+	chunks := []*CodeChunkRecord{
+		{ID: "lg1", Path: "handler.go", Content: "func HandleRequest(w http.ResponseWriter, r *http.Request) {}", Symbol: "HandleRequest", Language: "go", Tokens: 20, FileHash: "h1"},
+		{ID: "lg2", Path: "auth.py", Content: "def authenticate(token): return True", Symbol: "authenticate", Language: "python", Tokens: 10, FileHash: "h2"},
+		{ID: "lg3", Path: "utils.go", Content: "func FormatDate(t time.Time) string { return t.String() }", Symbol: "FormatDate", Language: "go", Tokens: 18, FileHash: "h3"},
+		{ID: "lg4", Path: "app.js", Content: "function handleRequest(req, res) { res.send('ok') }", Symbol: "handleRequest", Language: "javascript", Tokens: 12, FileHash: "h4"},
+	}
+	for _, c := range chunks {
+		if err := s.UpsertCodeChunk(ctx, c); err != nil {
+			t.Fatalf("UpsertCodeChunk %s: %v", c.ID, err)
+		}
+	}
+
+	// Search filtered to Go only
+	results, err := s.SearchCodeChunksByLanguage(ctx, "HandleRequest FormatDate authenticate handleRequest", []string{"go"}, 10)
+	if err != nil {
+		t.Fatalf("SearchCodeChunksByLanguage: %v", err)
+	}
+	for _, r := range results {
+		if r.Language != "go" {
+			t.Errorf("expected only Go results, got language=%q (id=%s)", r.Language, r.ID)
+		}
+	}
+	if len(results) == 0 {
+		t.Fatal("expected at least one Go result")
+	}
+
+	// Search with empty languages returns all
+	all, err := s.SearchCodeChunksByLanguage(ctx, "HandleRequest authenticate handleRequest", nil, 10)
+	if err != nil {
+		t.Fatalf("SearchCodeChunksByLanguage (all): %v", err)
+	}
+	if len(all) < 2 {
+		t.Errorf("expected results from multiple languages, got %d", len(all))
 	}
 }
 

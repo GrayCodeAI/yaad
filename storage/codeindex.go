@@ -284,9 +284,52 @@ func (s *Store) StoreVector(ctx context.Context, chunkID string, vec []float32) 
 	return err
 }
 
+// SearchCodeChunksByLanguage performs a full-text search filtered by language.
+// If languages is empty the search covers all languages (same as SearchCodeChunksFTS).
+func (s *Store) SearchCodeChunksByLanguage(ctx context.Context, query string, languages []string, limit int) ([]*CodeChunkRecord, error) {
+	if err := s.ensureCodeChunksFTS(ctx); err != nil {
+		return nil, fmt.Errorf("ensure FTS: %w", err)
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+
+	ftsQuery := escapeCodeFTS5(query)
+
+	if len(languages) == 0 {
+		return s.SearchCodeChunksFTS(ctx, query, limit)
+	}
+
+	// Build WHERE language IN (?, ?, ...) clause
+	placeholders := make([]string, len(languages))
+	args := make([]any, 0, len(languages)+2)
+	args = append(args, ftsQuery)
+	for i, lang := range languages {
+		placeholders[i] = "?"
+		args = append(args, lang)
+	}
+	args = append(args, limit)
+
+	q := `SELECT c.id, c.path, c.start_line, c.end_line, c.content, c.symbol, c.language, c.tokens, c.file_hash, c.schema_version, c.vector
+		 FROM code_chunks_fts f
+		 JOIN code_chunks c ON f.rowid = c.rowid
+		 WHERE code_chunks_fts MATCH ?
+		   AND c.language IN (` + strings.Join(placeholders, ",") + `)
+		 ORDER BY rank LIMIT ?`
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanCodeChunks(rows)
+}
+
 // SearchCodeChunksHybrid performs a hybrid search combining FTS5 ranking with
-// cosine similarity on stored vectors.
-func (s *Store) SearchCodeChunksHybrid(ctx context.Context, query string, queryVec []float32, limit int) ([]*CodeChunkRecord, error) {
+// cosine similarity on stored vectors. If languages is non-empty, only chunks
+// in those languages are considered.
+func (s *Store) SearchCodeChunksHybrid(ctx context.Context, query string, queryVec []float32, limit int, languages []string) ([]*CodeChunkRecord, error) {
 	if err := s.ensureCodeChunksFTS(ctx); err != nil {
 		return nil, fmt.Errorf("ensure FTS: %w", err)
 	}
@@ -296,13 +339,35 @@ func (s *Store) SearchCodeChunksHybrid(ctx context.Context, query string, queryV
 
 	// Step 1: FTS5 search to get top 50 candidates
 	ftsQuery := escapeCodeFTS5(query)
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT c.id, c.path, c.start_line, c.end_line, c.content, c.symbol, c.language, c.tokens, c.file_hash, c.schema_version, c.vector,
-		        rank
-		 FROM code_chunks_fts f
-		 JOIN code_chunks c ON f.rowid = c.rowid
-		 WHERE code_chunks_fts MATCH ?
-		 ORDER BY rank LIMIT 50`, ftsQuery)
+
+	var rows *sql.Rows
+	var err error
+	if len(languages) > 0 {
+		placeholders := make([]string, len(languages))
+		args := make([]any, 0, len(languages)+2)
+		args = append(args, ftsQuery)
+		for i, lang := range languages {
+			placeholders[i] = "?"
+			args = append(args, lang)
+		}
+		args = append(args, 50)
+		q := `SELECT c.id, c.path, c.start_line, c.end_line, c.content, c.symbol, c.language, c.tokens, c.file_hash, c.schema_version, c.vector,
+			        rank
+			 FROM code_chunks_fts f
+			 JOIN code_chunks c ON f.rowid = c.rowid
+			 WHERE code_chunks_fts MATCH ?
+			   AND c.language IN (` + strings.Join(placeholders, ",") + `)
+			 ORDER BY rank LIMIT ?`
+		rows, err = s.db.QueryContext(ctx, q, args...)
+	} else {
+		rows, err = s.db.QueryContext(ctx,
+			`SELECT c.id, c.path, c.start_line, c.end_line, c.content, c.symbol, c.language, c.tokens, c.file_hash, c.schema_version, c.vector,
+			        rank
+			 FROM code_chunks_fts f
+			 JOIN code_chunks c ON f.rowid = c.rowid
+			 WHERE code_chunks_fts MATCH ?
+			 ORDER BY rank LIMIT 50`, ftsQuery)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -146,7 +146,7 @@ func EnsureRunning(projectDir, addr string) error {
 	cmd.Dir = projectDir
 	cmd.Stdout = nil
 	cmd.Stderr = nil
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	setSysProcAttr(cmd)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start yaad daemon: %w", err)
 	}
